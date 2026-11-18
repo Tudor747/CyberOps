@@ -1,0 +1,14 @@
+Target: NodeMCU-32S / ESP32-WROOM-32, 4 MB flash, DIO, 40 MHz.
+Do not use these files on an ESP32-S3.
+
+Single merged image:
+0x00000000  fiirbots-nodemcu32s-merged.bin
+
+Alternatively, individual images:
+0x00001000  bootloader.bin
+0x00008000  partitions.bin
+0x0000E000  boot_app0.bin
+0x00010000  firmware.bin
+
+The application firmware starts stopped until POLL_HARDWARE arrives over USB serial.
+No board was flashed during the software validation.

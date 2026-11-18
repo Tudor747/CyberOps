@@ -1,0 +1,8 @@
+.venv/
+.pio/
+__pycache__/
+*.pyc
+.env
+data/
+*.db*
+test-results/

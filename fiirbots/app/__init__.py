@@ -1,0 +1,1 @@
+"""FIIRBots standalone monitoring application."""

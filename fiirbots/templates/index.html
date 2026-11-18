@@ -1,0 +1,88 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+  <meta name="action-token" content="__ACTION_TOKEN__">
+  <title>FIIRBots · Cyberdeck</title>
+  <link rel="stylesheet" href="/static/app.css"><script defer src="/static/app.js"></script>
+</head>
+<body>
+  <header><div class="brand"><span class="brand-mark">&#8984;</span><strong>FIIR<span>Bots</span></strong><small>CYBERDECK / RPi</small></div><div class="connection"><i id="connection-dot"></i><span id="connection">Connecting</span><time id="clock"></time></div></header>
+  <div class="shell">
+    <nav aria-label="Main navigation">
+      <button class="nav active" data-tab="overview"><span>◈</span>Overview</button>
+      <button class="nav" data-tab="network"><span>⌘</span>Network</button>
+      <button class="nav" data-tab="hardware"><span>▥</span>Hardware</button>
+      <button class="nav" data-tab="inventory"><span>▦</span>Inventory</button>
+      <button class="nav" data-tab="reports"><span>≡</span>Reports</button>
+      <button class="nav" data-tab="config"><span>⚙</span>Config</button>
+      <button class="nav" data-tab="tools"><span>&#9638;</span>All tools</button><div class="nav-bottom">RASPBERRY Pi<br><strong>FIELD SYSTEM / v2.0</strong></div>
+    </nav>
+    <main>
+      <div class="page-head"><div><small id="eyebrow">SYSTEM / LIVE STATUS</small><h1 id="page-title">Control deck</h1></div><span class="pill">MONITOR ONLY</span></div>
+      <div id="lock-banner" hidden>Operations locked · Release S1 after reboot, or check the GPIO connection.</div>
+      <div id="operation-status" class="job-banner" role="status" hidden></div>
+      <section id="overview" class="view">
+        <div class="deck-intro"><div><span class="deck-kicker">PORTABLE FIELD CONSOLE</span><h2>Observe. Inspect. Understand.</h2><p>Your network and instruments, in one control deck.</p></div><span class="deck-chip">Pi<span>+ ESP32</span></span></div>
+        <div class="module-grid" aria-label="Instrument shortcuts">
+          <button data-open="network" class="module network-module"><span class="module-icon">&#8984;</span><strong>Network</strong><small>ARP / TCP discovery</small><span class="module-index">01 &#8599;</span></button>
+          <button data-open="hardware" class="module radio-module"><span class="module-icon">&#8779;</span><strong>Radio spectrum</strong><small>2.4 GHz / Sub-GHz</small><span class="module-index">02 &#8599;</span></button>
+          <button data-test-module="rfid" class="module tag-module"><span class="module-icon">&#9636;</span><strong>RFID / NFC</strong><small>Read & inspect tags</small><span class="module-index">03 &#8599;</span></button>
+          <button data-test-module="ir_rx" class="module ir-module"><span class="module-icon">&#9678;</span><strong>IR & sensors</strong><small>Infrared / radar / I/O</small><span class="module-index">04 &#8599;</span></button>
+        </div>
+        <div class="metrics"><article><small>OBSERVED DEVICES</small><strong id="device-count">—</strong><span id="scan-age">No completed scan</span></article><article><small>BASELINE ALERTS</small><strong id="alert-count">—</strong><span>Unknown or changed devices</span></article><article><small>AI RISK SCORE</small><strong id="risk-score">—<em>/100</em></strong><span id="ai-state">Analysis on demand</span></article></div>
+        <div class="overview-bottom"><article class="panel scan-panel"><div class="panel-heading"><h2>Network observation</h2><span class="tiny-tag">LOCAL</span></div><div class="scope"><span class="scope-icon">⌘</span><div><strong id="scope">Not configured</strong><small id="interface">Configure a local subnet on the Pi</small></div></div><div class="progress"><progress id="progress" max="100" value="0"></progress><span id="job-message">Ready</span></div><div class="actions"><button class="primary" data-action="scan">Start scan <span>↗</span></button><button data-action="stop">Stop</button><button data-action="analyze">AI analysis</button></div></article><article class="panel device-panel"><h2>Peripheral link</h2><div id="esp-status" class="link-status">USB · disconnected</div><p>ESP32-WROOM-32<br>RF · RFID · IR · Radar</p><div class="line-label"><span>Safety control</span><strong id="gpio-state">—</strong></div><button data-open="hardware">Inspect hardware →</button></article></div>
+        <div class="deck-ai panel"><span class="ai-glyph">&#10035;</span><div><h2>AI field analyst</h2><p id="deck-ai-summary">Scan your network to build an evidence-based report.</p></div><button data-open="reports">Open analyst &#8599;</button></div>
+      </section>
+      <section id="network" class="view" hidden>
+        <article class="panel network-setup"><div class="panel-heading"><h2>Local network discovery</h2><button id="refresh-adapters">Refresh adapters</button></div>
+        <form id="network-config-form"><label>Active adapter<select id="network-adapter" required><option value="">Loading adapters...</option></select></label><label>IPv4 scope (maximum /24)<input id="network-scope" required placeholder="192.168.0.0/24"></label><button class="primary" id="apply-network" type="submit">Apply network</button></form>
+        <p id="network-config-status" class="hint" role="status">Choose the adapter connected to your local network. Selection lasts until the server restarts.</p>
+        <p class="hint">Discovery checks ARP and 13 common TCP ports. No response is inconclusive. Devices outside your inventory are marked UNAUTHORIZED, which does not by itself mean malicious.</p></article><div class="toolbar"><span id="batch-label">No scan yet</span><div><button data-action="scan">Scan</button><button data-action="stop">Stop</button></div></div><div class="table-wrap"><table><thead><tr><th>DEVICE / IP</th><th>OPEN PORTS</th><th>BASELINE STATUS</th><th>ACTION</th></tr></thead><tbody id="network-rows"></tbody></table></div><p class="hint">Service names are inferred from ports. MISSING means not observed in a completed scan.</p></section>
+      <section id="hardware" class="view" hidden><div id="hardware-message" class="hint">Connect the ESP32 by USB to receive hardware telemetry.</div><div class="hardware-grid"><article class="panel"><h2>2.4 GHz activity</h2><div id="rf-chart" aria-label="RF carrier detections"></div><div class="axis"><span>2400 MHz</span><span>2480 MHz</span></div><span id="nrf-state" class="hint">Waiting for radio</span></article><article class="panel"><h2>Peripheral readings</h2><dl><dt>CC1101 / 433.92 MHz</dt><dd id="subghz">—</dd><dt>Radar presence</dt><dd id="radar">Unknown</dd><dt>Last RFID UID</dt><dd id="rfid">—</dd><dt>Last IR code</dt><dd id="ir">—</dd><dt>W5500 link</dt><dd id="ethernet">Unknown</dd></dl></article></div></section>
+      <section id="inventory" class="view" hidden><div class="toolbar"><span>Authorized devices · explicit enrollment</span><button id="add-device" class="primary">+ Add device</button></div><div class="table-wrap"><table><thead><tr><th>NAME / IP</th><th>ROLE</th><th>ALLOWED PORTS</th><th></th></tr></thead><tbody id="inventory-rows"></tbody></table></div></section>
+      <section id="reports" class="view" hidden><article class="panel ai-connection"><div><h2>Gemini / connection</h2><p id="ai-check-result" class="hint" role="status">Connection not tested. A configured key does not guarantee API access.</p></div><button id="ai-check">Test AI connection</button></article><div class="toolbar"><span id="report-date">No AI report yet</span><div><button data-action="analyze">Analyze with Gemini</button><a class="button" href="/api/report/export" download="fiirbots-report.json">Export JSON</a></div></div><p class="hint">AI analysis sends the latest scan, inventory and recent hardware events to Google Gemini when requested.</p><p class="hint">AI scores are estimates. An empty baseline means devices are unregistered, not proven malicious. Service names are inferred from ports.</p><article class="panel"><p id="report-summary">Complete a scan, then request an analysis. Recommendations are for the operator; this device does not block network traffic.</p><div id="findings"></div></article><h2 class="retests-title">Operator retests</h2><div id="retests" class="hint">No retests recorded.</div></section>
+      <section id="tools" class="view" hidden>
+        <p class="hint">Reference: CYBERDECK MINI ESP32 V2. This catalog distinguishes implemented tools from functions that still require a port. No radio measurements are simulated.</p>
+        <div class="toolbar"><label>Show tools<select id="tool-filter"><option value="all">All categories</option><option value="PC">PC tools</option><option value="HARDWARE">External hardware</option><option value="NOT_PORTED">Not implemented</option></select></label><button id="system-refresh">Refresh system info</button></div>
+        <article class="panel"><h2>This computer</h2><dl id="system-info"><dt>Status</dt><dd>Press Refresh system info</dd></dl></article>
+        <article class="panel wifi-panel"><div class="panel-heading"><h2>Wi-Fi observation</h2><button id="wifi-scan">Scan Wi-Fi</button></div><p id="wifi-status" class="hint" role="status">Uses the computer's Wi-Fi adapter and OS permissions.</p><pre id="wifi-output">No observation requested.</pre></article>
+        <div id="tool-catalog" class="tool-catalog"></div>
+      </section>
+      <section id="config" class="view" hidden><p class="hint">Live ESP32 connection required. Without hardware, test execution is unavailable; you can inspect each test's instructions.</p>
+        <div class="toolbar"><span>Manual component checks</span><div><button id="test-history-refresh">History</button><button data-action="stop">Stop test</button></div></div>
+        <div class="diagnostic-layout">
+          <article class="panel test-controls">
+            <h2>Choose a component</h2>
+            <div id="component-picker" class="component-picker">
+              <button data-component="rfid" class="selected">RFID / NFC</button><button data-component="cc1101">433 MHz RX</button>
+              <button data-component="ir_rx">IR receiver</button><button data-component="ir_tx">IR emitter</button>
+              <button data-component="nrf1">nRF24 #1</button><button data-component="nrf2">nRF24 #2</button>
+              <button data-component="radar">LD2420 radar</button><button data-component="ethernet">W5500</button>
+            </div>
+            <p id="test-instructions" class="hint"></p>
+            <form id="test-form">
+              <div class="test-options"><label>Wait (seconds)<input id="test-duration" type="number" min="3" max="30" value="15" required></label><label id="rfid-options">Block / first page<input id="test-address" type="number" min="0" max="255" value="4" required></label></div>
+              <div id="radio-options" class="test-options" hidden><label>Frequency (MHz)<input id="test-frequency" type="number" min="433.05" max="434.79" step="0.01" value="433.92" required></label><label>Receive profile<select id="test-modulation"><option>OOK</option><option>2FSK</option><option>GFSK</option></select></label></div>
+              <button id="start-test" type="submit" class="primary">Read tag</button>
+            </form>
+          </article>
+          <article class="panel test-result" aria-live="polite">
+            <div class="panel-heading"><h2>Test feedback</h2><span id="test-state" class="status">NOT TESTED</span></div>
+            <p id="test-message">Select a module and start its test. Results come from the connected hardware.</p>
+            <small id="test-code" class="hint"></small>
+            <dl id="test-measurements"></dl>
+            <pre id="test-data" hidden></pre>
+            <button id="export-test" disabled>Save result / export JSON</button>
+            <p class="hint">PASS confirms only the reported check. PARTIAL and NO SIGNAL do not prove that a component is fully working or faulty.</p>
+          </article>
+        </div>
+        <div id="test-history" class="panel" hidden><h2>Saved manual tests</h2><div id="test-history-list"></div></div>
+      </section>
+    </main>
+  </div>
+  <footer><span><i></i> STANDALONE OBSERVATION</span><span>J1 / J2 Navigate &nbsp; J3 Select &nbsp; J4 Back &nbsp; J5 AI</span><span id="footer-state">LOCAL SYSTEM</span></footer>
+  <div id="toast" role="status" hidden></div>
+  <dialog id="device-dialog"><form id="device-form"><h2>Authorize a device</h2><p>Only enroll devices you recognize.</p><label>IPv4 address<input name="device_ip" required placeholder="192.168.1.10" inputmode="decimal"></label><label>Device name<input name="device_name" required maxlength="80" placeholder="Assembly PLC"></label><label>Role<input name="role" maxlength="60" value="Device"></label><label>MAC address (optional)<input name="mac_address" placeholder="AA:BB:CC:DD:EE:FF"></label><label>Allowed ports (comma separated)<input name="ports" placeholder="443, 502" inputmode="numeric"></label><div class="actions"><button type="button" id="cancel-device">Cancel</button><button class="primary" type="submit">Save baseline</button></div></form></dialog>
+</body>
+</html>
