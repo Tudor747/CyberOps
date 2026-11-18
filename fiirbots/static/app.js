@@ -180,31 +180,31 @@ document.querySelectorAll('[data-test-module]').forEach(b=>b.onclick=()=>{choose
 const toolCatalog = [
   ['Network','LAN discovery','PC','ARP + bounded TCP checks on a selected local adapter.','network'],
   ['Wi-Fi','WiFi Scanner','PC','OS-provided SSID, BSSID, channel, signal and security output. Location permissions may be required.','wifi'],
-  ['Wi-Fi','Threat Monitor','NOT_PORTED','The original Wi-Fi event monitor is not ported. LAN baseline alerts are a separate feature.'],
-  ['Wi-Fi','WiFi Audit','NOT_PORTED','Dedicated wireless audit is not ported. AI currently analyzes LAN scans and hardware events.'],
-  ['Wi-Fi','Probe Sniffer','NOT_PORTED','Requires a capture backend and a compatible monitor-mode adapter.'],
-  ['Wi-Fi','Beacon Spam','NOT_PORTED','Original firmware transmission tool; no desktop implementation.'],
-  ['Wi-Fi','Deauther','NOT_PORTED','Original firmware transmission tool; no desktop implementation.'],
+  ['Wi-Fi','Threat Monitor','HARDWARE','Receive-only deauthentication/disassociation observations. Events are not proof of attack. Requires a Linux monitor interface.','wireless-panel'],
+  ['Wi-Fi','WiFi Audit','HARDWARE','Observed BSSID, SSID, channel and privacy/RSN flags; not a vulnerability scan. Requires a Linux monitor interface.','wireless-panel'],
+  ['Wi-Fi','Probe Sniffer','HARDWARE','Bounded probe-request metadata capture on the current channel. Requires a Linux monitor interface.','wireless-panel'],
+  ['Wi-Fi','Beacon test (bounded)','HARDWARE','Up to 10 beacons for one selected observed lab SSID; no continuous flooding. Requires monitor/injection support.','lab-beacon-panel'],
+  ['Wi-Fi','Deauther / selected lab client','HARDWARE','Bounded unicast test for a recently observed lab AP/client pair. Requires monitor/injection support. Effect must be verified independently.','lab-deauth-panel'],
   ['Wi-Fi','Evil Portal','NOT_PORTED','Original firmware portal tool; no desktop implementation.'],
-  ['Wi-Fi','KARMA','NOT_PORTED','Original firmware access-point tool; no desktop implementation.'],
+  ['Wi-Fi','KARMA / selected-probe beacons','HARDWARE','Bounded port of reference probe-SSID advertising. No AP service or association handling. Requires monitor/injection support.','lab-beacon-panel'],
   ['Radio','2.4 GHz spectrum','HARDWARE','Live carrier detections from ESP32 + nRF24. Values are not dBm.','hardware'],
-  ['Radio','Waterfall / WiFi Channels','NOT_PORTED','Additional spectrum visualization modes are not ported.'],
-  ['Radio','RF Baseline','NOT_PORTED','Persistent RF baseline comparison is not implemented.'],
+  ['Radio','Waterfall / carrier frequencies','HARDWARE','Historical nRF24 occupancy samples with timestamps. No fabricated missing samples.','rf-history-panel'],
+  ['Radio','RF Baseline','HARDWARE','Save a fresh live RF sample and compare historical sweeps against it.','rf-history-panel'],
   ['Radio','nRF24 #1 diagnostics','HARDWARE','SPI checks and receive activity through the FIIRBots ESP32 firmware.','nrf1'],
   ['Radio','nRF24 #2 diagnostics','HARDWARE','Independent second-module checks.','nrf2'],
   ['Radio','Channel jammer','NOT_PORTED','Original firmware transmission tool; no desktop implementation.'],
-  ['Bluetooth','BLE Scanner','NOT_PORTED','Bluetooth scan backend is not connected to this application.'],
-  ['Bluetooth','BLE Defense','NOT_PORTED','BLE inventory and comparison backend is not ported.'],
+  ['Bluetooth','BLE Scanner','PC','Bounded BLE advertisement discovery. Requires working Bluetooth and OS permissions; Pi acceptance pending.','ble'],
+  ['Bluetooth','BLE Defense','PC','Explicit device enrollment and observation comparison; rotating addresses can produce false differences.','ble-defense-panel'],
   ['Bluetooth','BLE Spam','NOT_PORTED','Original advertising test tool; no desktop implementation.'],
   ['Bluetooth','BT Disruptor','NOT_PORTED','Original radio tool; no desktop implementation.'],
   ['Bluetooth','BT Jammer','NOT_PORTED','Original radio tool; no desktop implementation.'],
-  ['Monitor','Packet Monitor','NOT_PORTED','No raw Wi-Fi packet capture backend is configured.'],
+  ['Monitor','Packet Monitor','HARDWARE','Bounded receive-only frame counts and metadata. Requires a configured Linux monitor interface.','wireless-panel'],
   ['Monitor','Activity indicators / buzzer','NOT_PORTED','Original packet-rate indicators and buzzer are not ported.'],
   ['System','Mission Dashboard','PC','Real scan state, inventory, job progress and AI summary.','overview'],
   ['System','Audit Reports / AI','PC','Gemini reports for completed LAN scans, recent hardware events and JSON export.','reports'],
   ['System','Settings / System Info','PC','Adapter selection and real host CPU, RAM, disk and battery readings.','system'],
-  ['GPS','GPS dashboard / NMEA','NOT_PORTED','Requires GPS hardware and a new serial/NMEA backend.'],
-  ['GPS','Track logger / waypoints / compass','NOT_PORTED','GPS persistence and map views are not ported.'],
+  ['GPS','GPS dashboard / gpsd','HARDWARE','Fresh GPS fixes from local gpsd. Requires a real receiver and configured daemon.','gps-panel'],
+  ['GPS','Track logger / waypoints / course','HARDWARE','Saved tracks and waypoints, GeoJSON export and course over ground. No magnetic compass or map tiles.','gps-panel'],
   ['GPS','Snapshot / wardriving','NOT_PORTED','Requires combined GPS and wireless logging; not ported.'],
   ['System','MicroSD Manager / Info','NOT_PORTED','The original ESP32 microSD filesystem is not exposed to the app.'],
   ['System','Battery ADC','NOT_PORTED','ESP32 ADC battery data is not exposed. Host battery is shown separately.'],
@@ -228,6 +228,8 @@ function renderToolCatalog(){
     if(target){
       const b=button(status==='HARDWARE'?'Inspect test requirements':'Open tool',()=>{
         if(target==='wifi'){$('wifi-scan').focus();$('wifi-scan').scrollIntoView({block:'center'});}
+        else if(target.endsWith('-panel')){$(target).scrollIntoView({block:'start'});}
+        else if(target==='ble'){$('ble-scan').focus();$('ble-scan').scrollIntoView({block:'center'});}
         else if(target==='system'){$('system-refresh').click();}
         else if(testHelp[target]){chooseComponent(target);tab('config');}
         else tab(target);
@@ -270,3 +272,11 @@ $('system-refresh').onclick=async()=>{
   }catch(e){toast(e.message);}
 };
 loadAdapters();
+$('ble-scan').onclick=async()=>{
+  try{await api('/api/ble/scan','POST');$('ble-status').textContent='BLE scan started (10 seconds). Use Stop to cancel; refresh results after completion.';}
+  catch(e){$('ble-status').textContent=e.message;}
+};
+$('ble-refresh').onclick=async()=>{
+  try{const r=await api('/api/ble/latest');$('ble-status').textContent=r.status+' / '+(r.finished_at||'No completed scan');$('ble-output').textContent=JSON.stringify(r,null,2);}
+  catch(e){$('ble-status').textContent=e.message;}
+};

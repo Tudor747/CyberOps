@@ -28,6 +28,7 @@ def create_app(settings=None):
 
     app = FastAPI(title='FIIRBots Monitor', lifespan=lifespan, docs_url=None, redoc_url=None)
     app.state.controller = controller
+    from .tool_routes import router
     app.add_middleware(TrustedHostMiddleware, allowed_hosts=['localhost', '127.0.0.1', '[::1]', 'testserver'])
     app.mount('/static', StaticFiles(directory=ROOT / 'static'), name='static')
 
@@ -86,6 +87,17 @@ def create_app(settings=None):
     def wifi():
         return desktop_tools.wifi_observation()
 
+    @app.post('/api/ble/scan', status_code=202)
+    def ble_scan():
+        operation(controller.start_ble_scan)
+        return {'status': 'STARTED'}
+
+    @app.get('/api/ble/latest')
+    def ble_latest():
+        import json
+        rows = controller.db.rows("SELECT payload_data FROM hardware_events WHERE event_type='BLE_SCAN' ORDER BY id DESC LIMIT 1")
+        return json.loads(rows[0]['payload_data']) if rows else {'status': 'NOT_TESTED', 'devices': []}
+
     @app.get('/api/system')
     def system():
         return desktop_tools.system_status(controller.settings.database.resolve().parent)
@@ -141,6 +153,7 @@ def create_app(settings=None):
                 'ai': controller.db.latest_report(), 'hardware_events': controller.db.events(100),
                 'retests': controller.db.rows('SELECT * FROM remediation_logs ORDER BY id DESC LIMIT 100')}
 
+    app.include_router(router(controller, operation))
     return app
 
 

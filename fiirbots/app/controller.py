@@ -156,6 +156,17 @@ class Controller:
     def start_diagnostic(self, request):
         self.launch('Hardware test', lambda cancel: diagnostics.run_test(self, request, cancel))
 
+    def start_ble_scan(self):
+        import asyncio
+        from .ble_scanner import observe
+        def work(cancel):
+            result = asyncio.run(observe(cancel))
+            with self.guard:
+                if cancel.is_set():
+                    raise network_engine.ScanCancelled()
+                self.db.event('bluetooth', 'BLE_SCAN', result)
+        self.launch('BLE scan', work)
+
     def snapshot(self):
         with self.guard:
             job, locked = dict(self.job), self.locked

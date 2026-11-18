@@ -61,10 +61,21 @@ async def inspect(url, output):
         await evaluate("document.getElementById('system-refresh').click()")
         await asyncio.sleep(1)
         assert platform.system() in await evaluate("document.getElementById('system-info').textContent")
+        for control in ['wireless-interfaces','wireless-refresh','ble-defense-refresh','rf-history-refresh',
+                        'gps-refresh','lab-targets-refresh','lab-result-refresh','lab-probes-refresh','lab-beacon-result']:
+            await evaluate(f"document.getElementById('{control}').onclick()")
+        await asyncio.sleep(1)
+        assert await evaluate("document.getElementById('wireless-interface').options.length") >= 1
+        assert await evaluate("document.getElementById('rf-history-status').textContent.includes('No valid RF samples')")
+        assert await evaluate("document.getElementById('lab-status').textContent.includes('UNVERIFIED')")
+        assert not await evaluate("document.documentElement.scrollWidth > innerWidth")
         for width,height in [(1440,900),(390,844)]:
             await send('Emulation.setDeviceMetricsOverride',{'width':width,'height':height,'deviceScaleFactor':1,'mobile':False})
             await evaluate("document.querySelector('[data-tab=overview]').click()")
             assert not await evaluate("document.documentElement.scrollWidth > innerWidth")
+            await evaluate("tab('tools')")
+            assert not await evaluate("document.documentElement.scrollWidth > innerWidth")
+            await evaluate("tab('overview')")
             shot=await send('Page.captureScreenshot',{'format':'png'})
             (output/f'dashboard-{width}x{height}.png').write_bytes(base64.b64decode(shot['data']))
         await send('Emulation.setDeviceMetricsOverride',{'width':1440,'height':900,'deviceScaleFactor':1,'mobile':False})

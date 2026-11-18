@@ -35,8 +35,11 @@ The **All tools** catalog is an implementation-status list, not a claim of
 full firmware parity. `PC` tools are implemented; `HARDWARE` tools need the
 FIIRBots ESP32 firmware and matching peripherals. `NOT_PORTED` means no working
 application backend exists yet, even if the original firmware contains it.
-BLE, raw Wi-Fi packet monitoring, GPS/wardriving, microSD, RF baseline/waterfall
-and the original transmission tools are not implemented in this application.
+BLE inventory comparison, bounded raw Wi-Fi observation, RF history/baseline,
+GPS via gpsd, and limited selected-target lab radio tests now have Pi backends.
+Their hardware requirements and remaining gaps are in `FEATURE-READINESS.md`.
+This is not a full port: wardriving, microSD/ADC, weather, captive portal and
+radio-disruption functions remain unavailable.
 The original CYBERDECK firmware cannot be controlled by the FIIRBots serial
 protocol without an adapter or firmware changes. No hardware is simulated.
 
@@ -70,6 +73,66 @@ English-language standalone monitoring application for Raspberry Pi 5 and a Node
 The Pi connects to an existing network as an ordinary client. It discovers devices, compares observations against an explicit baseline, stores results locally and requests Gemini analysis on demand. It **does not act as a gateway, change firewall rules, isolate other hosts or execute AI recommendations**.
 
 ## What is implemented
+
+### BLE discovery
+
+The All tools page includes **Scan BLE (10 s)**, Stop, and Refresh BLE results.
+Discovery uses Bleak's standard active advertisement scanning without connecting
+or pairing. It shares the exclusive job controller with LAN scans and honors
+Stop/S1. Only completed observations are saved; refreshing after a cancelled or
+failed scan shows the previous completed result with its timestamp.
+
+Install the updated requirements in the application's virtual environment.
+On Raspberry Pi, a working Bluetooth adapter, running BlueZ service and D-Bus
+permissions for the `fiirbots` service user are required. These have not yet been
+validated on the Pi. No adapter, blocked Bluetooth or denied permissions produce
+an error, not a successful empty inventory. BLE addresses may rotate; this is
+discovery, not persistent identity. The separate BLE inventory panel adds explicit
+enrollment and comparison. Offline tests use a fake
+scanner and do not demonstrate reception on hardware.
+
+Backend API reference: [BleakScanner](https://bleak.readthedocs.io/en/stable/api/scanner.html).
+
+### Observation and laboratory tools
+
+All tools now provides:
+
+- Wireless packet counts, probe observations, AP privacy/RSN flags and
+  deauthentication/disassociation events. Select an existing Linux monitor
+  interface. The app never changes its mode or channel. Observation lasts 1–30
+  seconds and retains bounded metadata rather than traffic payloads.
+- BLE enrollment/comparison against a persistent, explicit baseline. Refresh the
+  latest completed scan, then enroll recognized devices individually.
+- RF waterfall and baseline comparison from saved nRF24 sweeps. A baseline
+  requires fresh connected hardware. Missing samples are never plotted as zeros.
+- GPS observation through a separately configured local gpsd on port 2947.
+  Fresh fixes are stored as tracks; saved positions can become named waypoints.
+  GeoJSON exports include up to 100 recent tracks and 100 waypoints. Course over
+  ground is not a stationary magnetic compass.
+- A selected-client deauthentication lab test and a selected-probe KARMA beacon
+  test. Both require an isolated authorized lab, an observation no older than
+  five minutes and a working monitor/injection radio. Each request is limited to
+  1–10 frames on the observed channel. The KARMA port advertises one selected
+  SSID, like the reference beacon behavior; it is not a usable AP or portal.
+  Results record submissions to the driver and always leave the actual effect
+  unverified. Confirm reception/client behavior independently.
+
+These operations share the existing exclusive job controller and Stop/S1
+cancellation. Completed observations persist; cancelled observations do not
+replace them. Lab transmission attempts are logged even when cancelled or failed.
+The global job banner shows errors; saved results retain their original timestamps.
+Export observations using the JSON link or GPS tracks using GeoJSON.
+
+For an existing installation, copy the updated project and rerun the installer
+to update Python dependencies, then restart the service. BLE additionally needs
+BlueZ and D-Bus permissions for the service user; gpsd and its receiver must be
+configured separately. No Pi hardware acceptance has been performed here.
+
+API implementation references: [Scapy capture](https://scapy.readthedocs.io/en/latest/api/scapy.sendrecv.html),
+[802.11 layers](https://scapy.readthedocs.io/en/latest/api/scapy.layers.dot11.html),
+[gpsd protocol](https://gpsd.gitlab.io/gpsd/gpsd_json.html).
+
+### Existing monitoring functions
 
 - Local FastAPI dashboard sized for an 800×480 touchscreen: Overview, Network, Hardware, Inventory and Reports.
 - SQLite persistence for the five specified tables, plus scan batch completion/cancellation tracking.
@@ -210,6 +273,22 @@ The Gemini key stays on the Pi. Pressing AI analysis or J5 sends the latest comp
 Service names are inferred from port numbers. Missing hosts can reflect filtering or network loss, and a changed MAC can reflect legitimate replacement. These observations require context; they are not proof of compromise. Baseline authorization is an explicit operator action rather than automatic enrollment of everything discovered.
 
 ## Troubleshooting and validation limits
+
+If installation fails with `cannot find -llgpio`, the native lgpio development
+library is missing. The installer now includes `swig` and `liblgpio-dev` before
+installing Python dependencies and checks that `lgpio` imports successfully.
+To recover an installation made with an older installer, run from the project
+folder on the Pi:
+
+```bash
+sudo apt update
+sudo apt install -y liblgpio-dev swig python3-dev build-essential
+sudo bash deploy/install.sh
+```
+
+Rerun the complete installer so service/environment setup after the failed pip
+step also finishes. Existing `/etc/fiirbots.env` and the database are retained.
+See [GPIO Zero virtual environment installation](https://gpiozero.readthedocs.io/en/stable/installing.html).
 
 ```bash
 sudo systemctl status fiirbots

@@ -13,7 +13,9 @@ desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
 if [[ -z "$desktop_home" || ! -d "$desktop_home" ]]; then echo 'Desktop user not found.'; exit 1; fi
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 apt-get update
-apt-get install -y python3-venv python3-dev build-essential chromium curl rsync sudo
+# lgpio may build from source (for example Python 3.13 on aarch64).
+# Its SWIG wrapper links against the system liblgpio development library.
+apt-get install -y python3-venv python3-dev build-essential swig liblgpio-dev chromium curl rsync sudo
 getent group gpio >/dev/null || groupadd --system gpio
 id fiirbots >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/fiirbots --shell /usr/sbin/nologin fiirbots
 usermod -a -G dialout,gpio fiirbots
@@ -25,6 +27,7 @@ if [[ "$project_dir" != /opt/fiirbots ]]; then
 fi
 python3 -m venv /opt/fiirbots/.venv
 /opt/fiirbots/.venv/bin/pip install -r /opt/fiirbots/requirements.txt
+/opt/fiirbots/.venv/bin/python -c 'import lgpio; print("lgpio import OK")'
 if [[ ! -e /etc/fiirbots.env ]]; then
     install -m 600 /opt/fiirbots/.env.example /etc/fiirbots.env
     # Require explicit scope configuration before the first scan.
