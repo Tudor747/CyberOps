@@ -16,6 +16,7 @@ static RF24 radio2(Pins::NRF2_CE,Pins::NRF2_CS,1000000);
 static MFRC522 rfid(Pins::RFID_CS,Pins::RFID_RST);
 static IRrecv ir(Pins::IR_RX,256,15,true);
 static decode_results irResult;
+static bool irEnabled=false;
 static HardwareSerial radar(2);
 static bool radios[2]={false,false}, ccReady=false, rfidReady=false, ethReady=false;
 static bool stopped=true, radarKnown=false, radarPresence=false;
@@ -46,6 +47,9 @@ static void finishTest(const char* state,const char* code,const char* message) {
     if(pulseAttached) {detachInterrupt(Pins::CC_GDO0);pulseAttached=false;}
 }
 
+// SmartRC 2.5.7 calls SPI.end() after register access. Reattach the shared bus.
+static void restoreSharedSPI() { SPI.begin(Pins::SCK,Pins::MISO,Pins::MOSI); }
+
 static void releaseBus() {
     for (auto pin:Pins::CHIP_SELECTS) digitalWrite(pin,HIGH);
 }
@@ -71,8 +75,8 @@ void peripheralsStop() {
     if (radios[0]) {radio1.stopListening();radio1.powerDown();}
     if (radios[1]) {radio2.stopListening();radio2.powerDown();}
     if (rfidReady) rfid.PCD_AntennaOff();
-    if (ccReady) ELECHOUSE_cc1101.setSidle();
-    ir.disableIRIn();
+    if (ccReady) {ELECHOUSE_cc1101.setSidle();restoreSharedSPI();}
+    if(irEnabled) {ir.disableIRIn();irEnabled=false;}
     digitalWrite(Pins::IR_TX,LOW);
     memset(counts,0,sizeof(counts));memset(bins,0,sizeof(bins));
     binsReady=false;channel=0;rounds=0;
@@ -100,13 +104,13 @@ void peripheralsBegin() {
         ELECHOUSE_cc1101.setSpiPin(Pins::SCK,Pins::MISO,Pins::MOSI,Pins::CC_CS);
         ELECHOUSE_cc1101.Init();
         ELECHOUSE_cc1101.setMHZ(433.92);
-        ELECHOUSE_cc1101.setSidle();
+        ELECHOUSE_cc1101.setSidle();restoreSharedSPI();
     }
     releaseBus();rfid.PCD_Init();
     uint8_t rfidVersion=rfid.PCD_ReadRegister(MFRC522::VersionReg);
     rfidReady=rfidVersion!=0 && rfidVersion!=0xff;
     if(rfidReady)rfid.PCD_AntennaOff();
-    ethReady=registerRead(Pins::ETH_CS,0x0039,true)==4;
+    ethReady=Pins::ETH_CS>=0 && registerRead(Pins::ETH_CS,0x0039,true)==4;
     // Basic-status text mode: ON/OFF and Range. Older firmware may use 256000.
     radar.begin(RADAR_BAUD,SERIAL_8N1,Pins::RADAR_RX,Pins::RADAR_TX);
     peripheralsStop();
@@ -168,9 +172,9 @@ void peripheralsPoll(JsonDocument& response) {
     if(testSession) {response["status"]="STOPPED";return;}
     if(stopped) {
         if(radios[0])radio1.powerUp();if(radios[1])radio2.powerUp();
-        if(ccReady)ELECHOUSE_cc1101.SetRx();
+        if(ccReady){ELECHOUSE_cc1101.SetRx();restoreSharedSPI();}
         if(rfidReady)rfid.PCD_AntennaOn();
-        ir.enableIRIn();stopped=false;
+        ir.enableIRIn();irEnabled=true;stopped=false;
     }
     response["status"]="OK";
     response["uptime_ms"]=millis();
@@ -182,12 +186,12 @@ void peripheralsPoll(JsonDocument& response) {
     response["ir_last_code"]=nullptr;
     if(lastIr.length())response["ir_last_code"]=lastIr;
     response["rf_subghz_rssi"]=nullptr;
-    if(ccReady)response["rf_subghz_rssi"]=ELECHOUSE_cc1101.getRssi();
+    if(ccReady){response["rf_subghz_rssi"]=ELECHOUSE_cc1101.getRssi();restoreSharedSPI();}
     response["nrf24_status"]=(radios[0]&&radios[1])?"DUAL RX":(radios[0]||radios[1])?"SINGLE RX":"NOT FOUND";
     response["rf_bins"]=nullptr;
     if(binsReady) {JsonArray output=response["rf_bins"].to<JsonArray>();for(auto value:bins)output.add(value);}
     response["rfid_status"]=rfidReady?"READY":"NOT FOUND";
-    response["ethernet_status"]=!ethReady?"NOT FOUND":(registerRead(Pins::ETH_CS,0x002e,true)&1)?"LINK UP":"LINK DOWN";
+    response["ethernet_status"]=Pins::ETH_CS<0?"EXTERNAL C3":!ethReady?"NOT FOUND":(registerRead(Pins::ETH_CS,0x002e,true)&1)?"LINK UP":"LINK DOWN";
 }
 
 static void IRAM_ATTR capturePulse() {
@@ -206,7 +210,7 @@ static void diagnosticCleanup() {
     if(pulseAttached) {detachInterrupt(Pins::CC_GDO0);pulseAttached=false;}
     if(ccTestConfigured && ccReady) {
         // Restore the normal monitor profile after any outcome, including STOP.
-        ELECHOUSE_cc1101.Init();ELECHOUSE_cc1101.setMHZ(433.92);ELECHOUSE_cc1101.setSidle();
+        ELECHOUSE_cc1101.Init();ELECHOUSE_cc1101.setMHZ(433.92);ELECHOUSE_cc1101.setSidle();restoreSharedSPI();
     }
     ccTestConfigured=false;testSession=false;
 }
@@ -274,7 +278,7 @@ static void diagnosticTick() {
     } else if(testComponent=="rfid" && millis()-testSampleAt>=100) {
         testSampleAt=millis();readTestTag();
     } else if(testComponent=="cc1101" && millis()-testSampleAt>=20) {
-        testSampleAt=millis();int rssi=ELECHOUSE_cc1101.getRssi();
+        testSampleAt=millis();int rssi=ELECHOUSE_cc1101.getRssi();restoreSharedSPI();
         m["rssi_dbm"]=rssi;
         if(rssi>(m["peak_rssi_dbm"] | -160))m["peak_rssi_dbm"]=rssi;
         if(rssi>-75)testHits++;
@@ -350,7 +354,7 @@ void peripheralsTestCommand(const JsonDocument& command, JsonDocument& response)
     peripheralsStop();diagnostic.clear();testSession=true;testComponent=component;
     testStarted=millis();heartbeat=testStarted;testDuration=duration*1000;testAddress=address;
     testSampleAt=0;testSamples=0;testHits=0;testRadarAt=radarAt;
-    diagnostic["test_id"]=id;diagnostic["component"]=component;diagnostic["state"]="RUNNING";
+    diagnostic["test_id"]=String(id);diagnostic["component"]=testComponent;diagnostic["state"]="RUNNING";
     diagnostic["code"]="WAITING";diagnostic["message"]="Waiting for a fresh measurement";
     diagnostic["elapsed_ms"]=0;diagnostic["duration_ms"]=testDuration;
     JsonObject m=diagnostic["measurements"].to<JsonObject>();
@@ -372,20 +376,24 @@ void peripheralsTestCommand(const JsonDocument& command, JsonDocument& response)
             ELECHOUSE_cc1101.Init();ccTestConfigured=true;
             ELECHOUSE_cc1101.setCCMode(false);ELECHOUSE_cc1101.setModulation(modulation=="OOK"?2:modulation=="GFSK"?1:0);
             ELECHOUSE_cc1101.setMHZ(frequency);ELECHOUSE_cc1101.setRxBW(270.83);ELECHOUSE_cc1101.setDRate(4.8);
-            ELECHOUSE_cc1101.setPktFormat(3);ELECHOUSE_cc1101.SpiWriteReg(0x02,0x0D);ELECHOUSE_cc1101.SetRx();
+            ELECHOUSE_cc1101.setPktFormat(3);ELECHOUSE_cc1101.SpiWriteReg(0x02,0x0D);ELECHOUSE_cc1101.SetRx();restoreSharedSPI();
             m["frequency_mhz"]=frequency;m["modulation"]=modulation;m["bandwidth_khz"]=270.83;
             m["data_rate_kbaud"]=4.8;m["protocol"]="UNKNOWN";m["peak_rssi_dbm"]=-160;
             portENTER_CRITICAL(&pulseMux);pulseCount=0;pulseLast=micros();pulseOverflow=false;portEXIT_CRITICAL(&pulseMux);
             attachInterrupt(Pins::CC_GDO0,capturePulse,CHANGE);pulseAttached=true;
         }
     } else if(testComponent=="ir_rx" || testComponent=="ir_tx") {
-        ir.enableIRIn();ir.resume();
+        ir.enableIRIn();irEnabled=true;ir.resume();
         if(testComponent=="ir_tx") {
             irEmitter.begin();irEmitter.sendNEC(IR_TEST_CODE,32,0);
             m["emitted_code"]="0xF1A500FF";m["carrier_khz"]=38;
             diagnostic["message"]="Point KY-005 at KY-022; waiting for matching NEC loopback";
         }
     } else if(testComponent=="ethernet") {
+        if(Pins::ETH_CS<0) {
+            finishTest("PARTIAL","EXTERNAL_W5500","Ethernet is on a separate ESP32-C3");
+            response["status"]="DIAGNOSTIC";response["test"]=diagnostic;return;
+        }
         uint8_t version=registerRead(Pins::ETH_CS,0x0039,true);ethReady=version==4;m["chip_version"]=version;
         if(!ethReady)finishTest("FAIL","W5500_NOT_FOUND","No W5500 response; check power, CS and SPI");
     } else if(testComponent=="radar") {
