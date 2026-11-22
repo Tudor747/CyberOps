@@ -6,11 +6,27 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
-from app.desktop_tools import wifi_observation
+from app.desktop_tools import pi_driver_observation, wifi_observation
 from app.network_engine import discover, ScanCancelled
 
 
 class LinuxWifiTests(unittest.TestCase):
+    def test_driver_retains_hidden_and_five_ghz_access_points(self):
+        output = (b'BSS 02:00:00:00:00:01(on wlan0) -- associated\n'
+                  b'\tfreq: 2437.0\n\tsignal: -42.00 dBm\n\tSSID: Lab\n\tRSN:\t * Version: 1\n'
+                  b'\t\t * Authentication suites: PSK SAE\n'
+                  b'BSS 02:00:00:00:00:02(on wlan0)\n\tfreq: 5180.0\n\tsignal: -73 dBm\n')
+        with patch('app.desktop_tools.platform.system', return_value='Linux'), \
+             patch('app.desktop_tools.subprocess.run', return_value=SimpleNamespace(
+                 returncode=0, stdout=output, stderr=b'')) as run:
+            result = pi_driver_observation()
+        first, second = result['access_points']
+        self.assertEqual(first['security'], 'RSN / PSK SAE')
+        self.assertEqual(first['rssi_dbm'], -42)
+        self.assertEqual(second['channel'], 36)
+        self.assertIsNone(second['ssid'])
+        self.assertEqual(run.call_args.args[0], ['/usr/bin/sudo', '-n', '/usr/sbin/iw', 'dev', 'wlan0', 'scan'])
+
     def observe(self, **kwargs):
         with patch('app.desktop_tools.platform.system', return_value='Linux'), \
              patch('app.desktop_tools.subprocess.run', **kwargs) as run:

@@ -57,6 +57,23 @@ def retain_wifi_cache(result, cache):
     return result
 
 
+def pi_driver_observation():
+    if platform.system() != 'Linux':
+        return None
+    try:
+        proc = subprocess.run(
+            ['/usr/bin/sudo', '-n', '/usr/sbin/iw', 'dev', 'wlan0', 'scan'],
+            capture_output=True, timeout=15, env={**os.environ, 'LC_ALL': 'C'})
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return {'status': 'UNAVAILABLE', 'message': str(exc)}
+    if proc.returncode:
+        return {'status': 'UNAVAILABLE', 'message': proc.stderr.decode('utf-8', errors='replace').strip()}
+    points = wifi_inventory.iw_access_points(proc.stdout.decode('utf-8', errors='replace'))
+    return {'status': 'OUTPUT', 'source': 'Linux Wi-Fi driver', 'scan_mode': 'Direct scan',
+            'access_points': points, 'observed_at': datetime.now(timezone.utc).isoformat(),
+            'message': f'{len(points)} access point observations from wlan0.'}
+
+
 def wifi_observation():
     system = platform.system()
     refresh = []

@@ -100,7 +100,16 @@ def collect(link, receivers, passes, cancel, progress):
             if cancel.is_set():
                 raise ScanCancelled()
             progress(index, receiver)
-            result = desktop_tools.wifi_observation() if receiver == 'Host' else esp_observation(link, cancel)
+            if receiver == 'Host':
+                driver = desktop_tools.pi_driver_observation()
+                if driver and driver['status'] == 'OUTPUT' and driver['access_points']:
+                    result = driver
+                else:
+                    result = desktop_tools.wifi_observation()
+                    if driver and driver['status'] == 'UNAVAILABLE':
+                        result['message'] += ' Direct wlan0 scan unavailable: ' + driver['message']
+            else:
+                result = esp_observation(link, cancel)
             observations.append({**result, 'pass': index, 'receiver': receiver})
         if index < passes and cancel.wait(2):
             raise ScanCancelled()

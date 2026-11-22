@@ -15,7 +15,7 @@ project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 apt-get update
 # lgpio may build from source (for example Python 3.13 on aarch64).
 # Its SWIG wrapper links against the system liblgpio development library.
-apt-get install -y python3-venv python3-dev python3-tk build-essential swig liblgpio-dev chromium curl rsync sudo
+apt-get install -y python3-venv python3-dev python3-tk build-essential swig liblgpio-dev chromium curl rsync sudo iw
 getent group gpio >/dev/null || groupadd --system gpio
 id fiirbots >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/fiirbots --shell /usr/sbin/nologin fiirbots
 usermod -a -G dialout,gpio fiirbots
@@ -36,6 +36,9 @@ fi
 printf '%s\n' 'fiirbots ALL=(root) NOPASSWD: /usr/bin/systemctl reboot' > /etc/sudoers.d/fiirbots-reboot
 chmod 440 /etc/sudoers.d/fiirbots-reboot
 visudo -cf /etc/sudoers.d/fiirbots-reboot
+printf '%s\n' 'fiirbots ALL=(root) NOPASSWD: /usr/sbin/iw dev wlan0 scan' > /etc/sudoers.d/fiirbots-wifi
+chmod 440 /etc/sudoers.d/fiirbots-wifi
+visudo -cf /etc/sudoers.d/fiirbots-wifi
 install -m 644 /opt/fiirbots/deploy/fiirbots.service /etc/systemd/system/fiirbots.service
 chmod 755 /opt/fiirbots/deploy/kiosk.sh
 desktop_dir=$(runuser -u "$desktop_user" -- xdg-user-dir DESKTOP 2>/dev/null || true)
