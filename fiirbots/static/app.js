@@ -54,7 +54,7 @@ function render() {
   $('risk-score').replaceChildren(document.createTextNode(state.report?.report.overall_threat_score ?? '—'),element('em','/100'));
   const current=state.report?.scan_batch_id===state.scan?.id;
   $('ai-state').textContent=state.report?(current?'Latest scan analyzed':'Previous scan report'):state.ai_configured?'Ready on demand':'API key not configured';
-  $('deck-ai-summary').textContent=state.report ? (current?'':'Previous scan \u00b7 ')+state.report.report.summary : state.ai_configured ? 'Analyst ready. Complete a scan, then request an AI report.' : 'Add GEMINI_API_KEY to .env to enable the analyst.';
+  $('deck-ai-summary').textContent=state.report ? (current?'':'Previous scan \u00b7 ')+state.report.report.summary : state.ai_configured ? 'Analyst ready. Complete a scan, then request an AI report.' : 'Set GEMINI_API_KEY in /etc/fiirbots.env on the Pi to enable the analyst.';
   $('scope').textContent=state.network||'Subnet not configured';$('interface').textContent=state.interface+' · ARP discovery + TCP checks';
   $('job-message').textContent=state.job.message;$('progress').value=state.job.progress;
   $('lock-banner').hidden=!state.locked;$('gpio-state').textContent=state.gpio;
@@ -86,6 +86,7 @@ function render() {
   // Avoid destroying the focused table action during physical-button navigation.
   if(!document.activeElement?.closest('tbody')) renderTables();
   renderDiagnostic();
+  syncWifiSurvey();
 }
 function navigate(action) {
   if(action==='BACK'){if($('device-dialog').open)$('device-dialog').close();else tab('overview');return;}
@@ -179,7 +180,7 @@ document.querySelectorAll('[data-test-module]').forEach(b=>b.onclick=()=>{choose
 // Feature parity catalog: availability is explicit; unavailable tools never fabricate results.
 const toolCatalog = [
   ['Network','LAN discovery','PC','ARP + bounded TCP checks on a selected local adapter.','network'],
-  ['Wi-Fi','WiFi Scanner','PC','OS-provided SSID, BSSID, channel, signal and security output. Location permissions may be required.','wifi'],
+  ['Wi-Fi','WiFi Scanner','PC','Multi-pass access point inventory from the host adapter and optional ESP32, with advertised security and per-receiver readings.','wifi'],
   ['Wi-Fi','Threat Monitor','HARDWARE','Receive-only deauthentication/disassociation observations. Events are not proof of attack. Requires a Linux monitor interface.','wireless-panel'],
   ['Wi-Fi','WiFi Audit','HARDWARE','Observed BSSID, SSID, channel and privacy/RSN flags; not a vulnerability scan. Requires a Linux monitor interface.','wireless-panel'],
   ['Wi-Fi','Probe Sniffer','HARDWARE','Bounded probe-request metadata capture on the current channel. Requires a Linux monitor interface.','wireless-panel'],
@@ -205,7 +206,7 @@ const toolCatalog = [
   ['System','Settings / System Info','PC','Adapter selection and real host CPU, RAM, disk and battery readings.','system'],
   ['GPS','GPS dashboard / gpsd','HARDWARE','Fresh GPS fixes from local gpsd. Requires a real receiver and configured daemon.','gps-panel'],
   ['GPS','Track logger / waypoints / course','HARDWARE','Saved tracks and waypoints, GeoJSON export and course over ground. No magnetic compass or map tiles.','gps-panel'],
-  ['GPS','Snapshot / wardriving','NOT_PORTED','Requires combined GPS and wireless logging; not ported.'],
+  ['GPS','Wi-Fi position snapshot','HARDWARE','Record the receiver position during one passive ESP32 Wi-Fi scan. Requires a co-located gpsd receiver.','gps-snapshot-panel'],
   ['System','MicroSD Manager / Info','NOT_PORTED','The original ESP32 microSD filesystem is not exposed to the app.'],
   ['System','Battery ADC','NOT_PORTED','ESP32 ADC battery data is not exposed. Host battery is shown separately.'],
   ['System','Clock','PC','Computer-local clock in the dashboard header.','overview'],
@@ -240,6 +241,11 @@ function renderToolCatalog(){
 }
 $('tool-filter').onchange=renderToolCatalog;
 let networkAdapters=[];
+function showScopes(adapter){
+  $('local-scopes').replaceChildren(...(adapter?.available_scopes || []).map(scope => {
+    const option=document.createElement('option');option.value=scope;return option;
+  }));
+}
 async function loadAdapters(){
   const select=$('network-adapter');const previous=select.value;
   try{
@@ -250,21 +256,93 @@ async function loadAdapters(){
     $('apply-network').disabled=false;
     const configured=networkAdapters.findIndex(a=>a.interface===state?.interface);
     select.value=configured>=0?String(configured):networkAdapters[Number(previous)]?previous:'0';
+    showScopes(networkAdapters[Number(select.value)]);
     $('network-scope').value=state?.network||networkAdapters[Number(select.value)].suggested_scope;
   }catch(e){$('network-config-status').textContent=e.message;}
 }
 $('refresh-adapters').onclick=loadAdapters;
-$('network-adapter').onchange=()=>{$('network-scope').value=networkAdapters[Number($('network-adapter').value)]?.suggested_scope||'';};
+$('network-adapter').onchange=()=>{showScopes(networkAdapters[Number($('network-adapter').value)]);$('network-scope').value=networkAdapters[Number($('network-adapter').value)]?.suggested_scope||'';};
 $('network-config-form').onsubmit=async e=>{
   e.preventDefault();const a=networkAdapters[Number($('network-adapter').value)];if(!a)return;
   try{const result=await api('/api/network/configure','PUT',{network:$('network-scope').value.trim(),interface:a.interface});$('network-config-status').textContent='Selected '+result.network+' via '+result.interface+'. Press Scan to discover devices.';await refresh();}
   catch(error){$('network-config-status').textContent=error.message;}
 };
-$('wifi-scan').onclick=async()=>{
-  const b=$('wifi-scan');b.disabled=true;$('wifi-status').textContent='Requesting Wi-Fi observation...';
-  try{const r=await api('/api/wifi','POST');$('wifi-status').textContent=r.status+' / '+r.message+(r.observed_at?' / '+r.observed_at:'');$('wifi-output').textContent=r.output||'No observations available.';}
-  catch(e){$('wifi-status').textContent=e.message;}
-  finally{b.disabled=false;}
+let wifiNeedsRefresh = true, wifiLoading = false, wifiStarting = false;
+function renderWifiSurvey(result) {
+  if (result.status === 'NOT_TESTED') return;
+  const points = result.access_points;
+  const available = result.status !== 'UNAVAILABLE';
+  const totals = result.summary;
+  $('wifi-count').textContent = available
+    ? `${points.length} distinct BSSIDs · ${totals.named_ssids} named networks · ${result.status} · ${result.finished_at}`
+    : 'Receiver data unavailable · ' + result.finished_at;
+  $('wifi-protection').textContent = available
+    ? `Advertised security across the survey: ${totals.open_bssids} BSSIDs reported open, ${totals.wep_bssids} reported WEP. ${totals.shared_ssids} network names appeared on multiple BSSIDs. Mesh networks and multiple bands can share a name.` : '';
+  const rows = $('wifi-rows'); rows.replaceChildren();
+  for (const ap of points) {
+    const row = element('tr');
+    const fallback = ap.samples.some(s => s.ssid === '') ? 'Hidden name' : 'Name unavailable';
+    cell(row, ap.ssids.join(' / ') || fallback).append(element('small', ap.bssid));
+    const readings = new Map();
+    for (const s of ap.samples) readings.set(JSON.stringify([s.source, s.interface]), s);
+    const channels = new Set(), security = new Set();
+    const channelCell = cell(row, ''), signalCell = cell(row, '');
+    for (const s of readings.values()) {
+      if (s.channel != null) channels.add(s.channel + (s.frequency_mhz ? ' · ' + s.frequency_mhz + ' MHz' : ''));
+      const signal = s.rssi_dbm != null ? s.rssi_dbm + ' dBm' : s.signal_percent != null ? s.signal_percent + '%' : 'Unavailable';
+      signalCell.append(element('div', signal + ' · ' + [s.source, s.interface].filter(Boolean).join(' / ')));
+    }
+    for (const s of ap.samples) if (s.security) security.add(s.security);
+    channelCell.textContent = [...channels].join(' / ') || 'Unknown';
+    cell(row, [...security].join(' / ') || 'Unknown'); rows.append(row);
+  }
+  $('wifi-table').hidden = !points.length;
+  const detail = $('wifi-sources'); detail.replaceChildren();
+  for (const s of result.sources) {
+    const count = s.observed_rows == null ? '' : ' · ' + s.observed_rows + ' rows';
+    detail.append(element('p', `Pass ${s.pass} · ${s.receiver} · ${s.status}${count} · ${s.scan_mode || 'Unknown mode'} · ${s.message || ''}`));
+    if (s.output) detail.append(element('pre', s.output));
+  }
+  $('wifi-details').hidden = false;
+  if (result.status !== 'COMPLETE') $('wifi-details').open = true;
+}
+async function syncWifiSurvey() {
+  const running = state.job.status === 'RUNNING';
+  const surveying = running && state.job.kind === 'Wi-Fi survey';
+  $('wifi-scan').disabled = wifiStarting || state.locked || running;
+  $('wifi-stop').disabled = !surveying;
+  if (surveying) {
+    wifiNeedsRefresh = true;
+    $('wifi-status').textContent = state.job.message;
+    return;
+  }
+  if (!wifiNeedsRefresh || wifiLoading || wifiStarting) return;
+  wifiLoading = true;
+  wifiNeedsRefresh = false;
+  try {
+    renderWifiSurvey(await api('/api/wifi/survey/latest'));
+    $('wifi-status').textContent = state.job.kind === 'Wi-Fi survey' && ['CANCELLED', 'ERROR'].includes(state.job.status)
+      ? state.job.message + '. Showing the last saved survey.' : '';
+  } catch (error) {
+    $('wifi-status').textContent = error.message;
+    wifiNeedsRefresh = true;
+  } finally { wifiLoading = false; }
+}
+$('wifi-scan').onclick = async () => {
+  wifiStarting = true;
+  $('wifi-scan').disabled = true;
+  try {
+    await api('/api/wifi/survey', 'POST', {receiver: $('wifi-receiver').value, passes: Number($('wifi-passes').value)});
+    wifiNeedsRefresh = true;
+    $('wifi-status').textContent = 'Starting Wi-Fi survey…';
+  } catch (error) { $('wifi-status').textContent = error.message; }
+  finally { wifiStarting = false; }
+  await refresh().catch(error => toast(error.message));
+};
+$('open-wifi-survey').onclick = () => {
+  tab('tools');
+  $('wifi-panel').scrollIntoView({block: 'start'});
+  $('wifi-receiver').focus({preventScroll: true});
 };
 $('system-refresh').onclick=async()=>{
   try{const r=await api('/api/system');const list=$('system-info');list.replaceChildren();

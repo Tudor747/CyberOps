@@ -27,6 +27,8 @@ void serialProtocolTick() {
             response["request_id"]=command["request_id"] | "";
             const char* cmd=command["cmd"] | "";
             if (!strcmp(cmd,"POLL_HARDWARE")) peripheralsPoll(response);
+            else if (!strcmp(cmd,"WIFI_SCAN_START") || !strcmp(cmd,"WIFI_SCAN_PAGE") || !strcmp(cmd,"WIFI_SCAN_CANCEL"))
+                peripheralsWifiCommand(command,response);
             else if (!strcmp(cmd,"TEST_START") || !strcmp(cmd,"TEST_STATUS") || !strcmp(cmd,"TEST_CANCEL")) {
                 peripheralsTestCommand(command,response);
             }

@@ -58,6 +58,10 @@ $('rf-baseline-save').onclick=()=>toolAction('rf-history-status',async()=>{
   await api('/api/rf/baseline','PUT');await renderRfHistory();
 });
 let gpsTrack=null, labObservation=null;
+$('gps-snapshot').onclick = () => toolAction('snapshot-status', async () => {
+  await api('/api/gps/wifi-snapshot','POST');
+  $('snapshot-status').textContent = 'Recording. Check the operation status before downloading the last saved snapshot.';
+});
 $('gps-observe').onclick=()=>toolAction('gps-status',async()=>{
   await api('/api/gps/observe','POST',{duration_s:5});$('gps-status').textContent='Recording fresh fixes for 5 seconds. Refresh after completion.';
 });

@@ -1,11 +1,13 @@
 """Local adapters and OS-provided Wi-Fi observations; no shell interpolation."""
 import ipaddress
+import os
 import platform
 import socket
 import subprocess
 import shutil
 from datetime import datetime, timezone
 import psutil
+from . import wifi_inventory, windows_wifi
 
 
 def adapters():
@@ -27,7 +29,9 @@ def adapters():
                           ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16'))
             if private:
                 result.append({'interface': name, 'address': addr.address, 'network': str(net),
-                               'suggested_scope': str(segment)})
+                               'suggested_scope': str(segment),
+                               'available_scopes': [str(n) for n in net.subnets(new_prefix=24)]
+                               if 18 <= net.prefixlen < 24 else [str(segment)]})
     return result
 
 
@@ -43,22 +47,67 @@ def validate_selection(network, interface):
 
 def wifi_observation():
     system = platform.system()
+    refresh = []
+    refresh_note = ''
     if system == 'Windows':
+        source = 'Windows WLAN'
+        scan_mode = 'OS cache'
+        try:
+            refresh = windows_wifi.scan_interfaces()
+            completed = sum(adapter['state'] == 'complete' for adapter in refresh)
+            if completed:
+                scan_mode = ('OS-managed rescan' if completed == len(refresh)
+                             else 'Mixed refreshed and cached adapters')
+            refresh_note = f' {completed}/{len(refresh)} adapters confirmed a scan completion.'
+        except OSError as exc:
+            refresh_note = f' Scan refresh unavailable ({exc}).'
         command = ['netsh', 'wlan', 'show', 'networks', 'mode=bssid']
     elif system == 'Linux':
-        command = ['nmcli', '--colors', 'no', '-f', 'SSID,BSSID,CHAN,SIGNAL,SECURITY',
+        source, scan_mode = 'NetworkManager', 'OS-managed rescan requested'
+        command = ['nmcli', '--colors', 'no', '--terse', '--escape', 'yes', '-f', wifi_inventory.NM_FIELDS,
                    'device', 'wifi', 'list', '--rescan', 'yes']
     else:
-        return {'status': 'UNAVAILABLE', 'message': 'Wi-Fi observation is supported on Windows and Linux'}
+        return {'status': 'UNAVAILABLE', 'message': 'Wi-Fi observation is supported on Windows and Linux',
+                'access_points': []}
+    result = {'status': 'UNAVAILABLE', 'source': source, 'scan_mode': scan_mode, 'access_points': [],
+              'refresh': refresh}
+    run_options = {'capture_output': True, 'timeout': 20,
+                   'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
+    if system == 'Linux':
+        run_options['env'] = {**os.environ, 'LC_ALL': 'C'}
     try:
-        proc = subprocess.run(command, capture_output=True, timeout=20,
-                              creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
-        output = (proc.stdout + proc.stderr).decode('utf-8', errors='replace').strip()
-        return {'status': 'OUTPUT' if proc.returncode == 0 else 'UNAVAILABLE',
-                'message': 'OS output; empty results or permission messages are not proof that no Wi-Fi exists.',
-                'output': output[:50000], 'observed_at': datetime.now(timezone.utc).isoformat()}
-    except (OSError, subprocess.TimeoutExpired):
-        return {'status': 'UNAVAILABLE', 'message': 'Wi-Fi command unavailable or timed out. Check adapter and OS permissions.'}
+        proc = subprocess.run(command, **run_options)
+        encoding = 'oem' if os.name == 'nt' and system == 'Windows' else 'utf-8'
+        output = proc.stdout.decode(encoding, errors='replace')
+        error = proc.stderr.decode(encoding, errors='replace').strip()
+        result['output'] = '\n'.join(part for part in (output.rstrip('\r\n'), error) if part)
+        result['observed_at'] = datetime.now(timezone.utc).isoformat()
+        if proc.returncode:
+            result['message'] = 'The adapter inventory failed. Check the OS output and permissions.' + refresh_note
+            return result
+        if system == 'Windows':
+            points, malformed, confirmed_empty = wifi_inventory.netsh_access_points(output)
+        else:
+            points, malformed = wifi_inventory.nm_access_points(output)
+            confirmed_empty = False
+            if not points and not output.strip() and not error:
+                devices = subprocess.run(['nmcli', '-t', '-f', 'TYPE,STATE', 'device', 'status'], **run_options)
+                confirmed_empty = devices.returncode == 0 and any(
+                    line.startswith('wifi:') and line.split(':', 1)[1] in ('connected', 'connected (externally)', 'disconnected')
+                    for line in devices.stdout.decode('utf-8', errors='replace').splitlines())
+        result['access_points'] = points
+        if points or confirmed_empty:
+            result['status'] = 'PARTIAL' if malformed or error else 'OUTPUT'
+            result['message'] = f'{len(points)} adapter observations.' + refresh_note
+            if malformed:
+                result['message'] += f' {malformed} malformed records in the OS output.'
+            if error:
+                result['message'] += ' The OS also returned a warning.'
+        else:
+            result['message'] = 'No usable adapter inventory. Check radio availability, permissions and OS output.' + refresh_note
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        result['message'] = f'Wi-Fi command unavailable or timed out ({exc}).' + refresh_note
+    return result
 
 
 def system_status(storage_path):

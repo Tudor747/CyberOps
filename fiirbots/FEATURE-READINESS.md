@@ -1,6 +1,63 @@
 # Full Cyberdeck integration readiness
 
-Assessment date: 2026-11-18.
+## Wi-Fi visibility and protection review, 2026-11-22
+
+The handheld reference runs on an ESP32-S3 with a local screen. FIIRBots uses a
+Pi or Windows dashboard and a NodeMCU-32S / ESP32-WROOM-32 peripheral board.
+These devices observe different parts of the radio environment.
+
+The new Wi-Fi survey collects one or three passes from the host adapter, the
+ESP32, or both. It groups observations by BSSID and retains each receiver,
+pass and signal measurement. A repeat sighting of the same AP counts once.
+Separate BSSIDs sharing a name each get an entry. The security summary counts
+APs advertised as open or WEP and names shared by multiple BSSIDs. A failed
+receiver is recorded separately, so results from a working receiver remain
+available. [Survey aggregation](app/wifi_survey.py)
+
+The ESP32 listens for 300 ms per channel during a passive scan, includes hidden
+SSIDs, and returns the driver's AP inventory over USB serial in pages of up to
+12 entries. The host reads successive pages
+until the firmware-reported total is reached. The Windows collector reports
+whether an adapter refresh completed or cached results were used. On Linux the
+collector asks NetworkManager to rescan. [ESP32 survey](src/WifiSurvey.cpp) · [Host collector](app/desktop_tools.py)
+
+A live Windows check confirmed scan completion on one adapter and returned 17
+distinct BSSIDs. This is a count for that adapter and observation time. The
+ESP32 survey and nRF spectrum still require an over-the-air check on the assembled
+board.
+
+| Observation | What FIIRBots can report | Limits on interpretation |
+| --- | --- | --- |
+| Wi-Fi access points | A Wi-Fi receiver can identify a BSSID, advertised network name, channel and security details. Several BSSIDs can advertise the same name. | A hidden SSID can yield a BSSID with an empty name. Coverage depends on the receiver's supported bands, channel selection, signal strength and observation time. The WROOM-32 Wi-Fi radio covers 2.4 GHz. [Espressif module datasheet](https://documentation.espressif.com/esp32-wroom-32_datasheet_en.html) |
+| nRF24 spectrum | In the FIIRBots monitor, eight receive windows per frequency produce threshold-detection counts across 2400–2480 MHz. When both radios respond, they take alternating channels. Automatic acknowledgements are disabled. | A positive count identifies energy in that bin. The count supplies neither an AP identity nor a signal level in dBm. The two external nRF antennas serve those radios. [Nordic RPD specification, §6.4](https://docs-be.nordicsemi.com/bundle/nRF24L01P_PS_v1.0/raw/resource/enus/nRF24L01P_PS_v1.0.pdf) |
+| Wi-Fi management events | An existing Linux monitor interface can count beacons, deauthentication and disassociation frames, and report AP privacy and RSN flags on its current channel. | A disconnect frame can accompany normal operation. The monitor covers the channel it listened to. The Pi driver described in the November 18 assessment did not advertise monitor mode. |
+
+The revised nRF monitor and diagnostic wait 200 µs before sampling the power
+detector. The serial output includes `rf_dwell_us`. Compare RF baselines only
+with samples acquired at the same dwell. Earlier records omit the setting and
+belong to the legacy series. [nRF acquisition](src/Peripherals.cpp)
+
+The reference Wi-Fi scanner includes hidden networks but keeps up to 30 APs per
+scan. Its Threat Monitor takes an initial inventory of up to 36 APs, then samples
+management frames while changing channels. A count of duplicate names can include
+legitimate mesh nodes. RF peak heights and shared names alone cannot identify an
+attack. [Reference Wi-Fi scanner](../CYBERDECK-MINI-ESP32-V2/src/WifiScanner.cpp) · [Reference Threat Monitor](../CYBERDECK-MINI-ESP32-V2/src/ThreatMonitor.cpp)
+
+The CC1101 receives sub-GHz signals. RC522, infrared and LD2420 provide tag,
+infrared and presence observations respectively. W5500 provides Ethernet. None
+adds Wi-Fi bands or access point identities. The `fiirbots` and `resources-radar`
+wiring profiles select different pin assignments. Photos identify the second
+board as an ESP32-C3 Super Mini. Its W5500 wiring and inter-board connection
+still need confirmation. No physical test of these peripherals was performed
+for this review. [Board and wiring evidence](../docs/esp32-agents.md)
+
+## Historical assessment, 2026-11-18
+
+The current dashboard also supports an on-demand Wi-Fi position snapshot.
+It saves positions from local gpsd whose timestamps fall within the passive
+ESP32 scan window. Physical GPS and ESP32 acceptance remains pending.
+
+The following assessment and matrix describe the integration at that date.
 
 The existing FIIRBots monitor can proceed to a first Pi installation. Full
 Cyberdeck feature parity is **not ready**. Copying the reference firmware folder
@@ -64,7 +121,7 @@ backend is impossible; neither has been validated here.
   was performed for this assessment. Historical desktop live checks are recorded
   separately in CYBERDECK-VALIDATION.md.
 
-## Implementation and acceptance matrix
+## Implementation and acceptance matrix, 2026-11-18
 
 These groups cover the existing UI catalog. A catalog entry alone is not a
 working implementation, and an implemented function is not automatically tested
@@ -109,7 +166,7 @@ on the Pi.
 Full-feature readiness requires working backends and actual acceptance evidence.
 Neither a successful build nor mocked tests can substitute for radio validation.
 
-## Current limits of the port
+## Limits recorded on 2026-11-18
 
 This is not full feature parity. The remaining NOT_PORTED entries are deliberate
 status reports, not runnable buttons. Firmware for the user's ESP boards has not

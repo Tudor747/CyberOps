@@ -8,6 +8,7 @@
 #include <ELECHOUSE_CC1101_SRC_DRV.h>
 #include "Pins.h"
 #include "Peripherals.h"
+#include "WifiSurvey.h"
 
 // Carrier-detection approach adapted from Cyberdeck Mini's RadioScanner.cpp.
 // No local display, deauthentication, replay or RF transmit operations.
@@ -23,6 +24,8 @@ static bool stopped=true, radarKnown=false, radarPresence=false;
 static unsigned long heartbeat=0, radarAt=0, irAt=0, rfidAt=0, sampleAt=0;
 static String lastRfid, lastIr;
 static uint8_t counts[81]={0}, bins[81]={0}, channel=0, rounds=0;
+// Allow RX settling and the RPD detection interval after asserting CE.
+static constexpr unsigned rfDwellUs = 200;
 static bool binsReady=false;
 static IRsend irEmitter(Pins::IR_TX);
 static JsonDocument diagnostic;
@@ -68,6 +71,7 @@ static uint8_t registerRead(uint8_t cs,uint16_t address,bool ethernet) {
 }
 
 void peripheralsStop() {
+    wifiSurveyStop();
     if(testRunning())finishTest("CANCELLED","CANCELLED","Test stopped");
     diagnosticCleanup();
     stopped=true;
@@ -134,6 +138,7 @@ static void readRadar() {
 }
 
 void peripheralsTick() {
+    wifiSurveyTick();
     readRadar();
     if(testSession) {
         if(millis()-heartbeat>3500)peripheralsStop();
@@ -148,7 +153,7 @@ void peripheralsTick() {
     if(!available && radios[1]) {selected=&radio2;available=true;}
     if(available) {
         releaseBus();selected->setChannel(channel);selected->startListening();
-        delayMicroseconds(150);
+        delayMicroseconds(rfDwellUs);
         if(selected->testRPD())counts[channel]++;
         selected->stopListening();
     }
@@ -165,6 +170,10 @@ void peripheralsTick() {
             rfidAt=millis();rfid.PICC_HaltA();rfid.PCD_StopCrypto1();
         }
     }
+}
+
+void peripheralsWifiCommand(const JsonDocument& command, JsonDocument& response) {
+    wifiSurveyCommand(command, response, !stopped && !testSession && millis()-heartbeat <= 3500);
 }
 
 void peripheralsPoll(JsonDocument& response) {
@@ -189,7 +198,11 @@ void peripheralsPoll(JsonDocument& response) {
     if(ccReady){response["rf_subghz_rssi"]=ELECHOUSE_cc1101.getRssi();restoreSharedSPI();}
     response["nrf24_status"]=(radios[0]&&radios[1])?"DUAL RX":(radios[0]||radios[1])?"SINGLE RX":"NOT FOUND";
     response["rf_bins"]=nullptr;
-    if(binsReady) {JsonArray output=response["rf_bins"].to<JsonArray>();for(auto value:bins)output.add(value);}
+    if(binsReady) {
+        response["rf_dwell_us"]=rfDwellUs;
+        JsonArray output=response["rf_bins"].to<JsonArray>();
+        for(auto value:bins)output.add(value);
+    }
     response["rfid_status"]=rfidReady?"READY":"NOT FOUND";
     response["ethernet_status"]=Pins::ETH_CS<0?"EXTERNAL C3":!ethReady?"NOT FOUND":(registerRead(Pins::ETH_CS,0x002e,true)&1)?"LINK UP":"LINK DOWN";
 }
@@ -272,7 +285,7 @@ static void diagnosticTick() {
     JsonObject m=diagnostic["measurements"].as<JsonObject>();
     if(testComponent=="nrf1" || testComponent=="nrf2") {
         RF24& radio=testComponent=="nrf1"?radio1:radio2;
-        radio.setChannel(testSamples%81);radio.startListening();delayMicroseconds(150);
+        radio.setChannel(testSamples%81);radio.startListening();delayMicroseconds(rfDwellUs);
         if(radio.testRPD())testHits++;radio.stopListening();testSamples++;
         m["samples"]=testSamples;m["carrier_hits"]=testHits;
     } else if(testComponent=="rfid" && millis()-testSampleAt>=100) {
@@ -361,6 +374,7 @@ void peripheralsTestCommand(const JsonDocument& command, JsonDocument& response)
     if(testComponent=="nrf1" || testComponent=="nrf2") {
         int index=testComponent=="nrf1"?0:1;RF24& radio=index?radio2:radio1;
         radios[index]=radio.begin() && radio.isChipConnected();m["spi_connected"]=radios[index];
+        m["rf_dwell_us"]=rfDwellUs;
         if(!radios[index])finishTest("FAIL","NRF_NOT_FOUND","No nRF24 response; check 3.3V, CE, CSN and shared SPI");
         else {radio.setAutoAck(false);radio.disableCRC();radio.setDataRate(RF24_1MBPS);radio.powerUp();}
     } else if(testComponent=="rfid") {

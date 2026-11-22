@@ -21,15 +21,17 @@ this launcher. The desktop database is separate (`data/dashboard-preview.db`).
    the report as JSON. This sends scan/baseline data and recent hardware events
    to Gemini only on request.
 5. Open **All tools** for the complete reference-feature catalog, **Scan Wi-Fi**
-   for the OS observation output, and **Refresh system info** for real host
+   for the nearby access point inventory, and **Refresh system info** for real host
    CPU, RAM, storage and battery readings.
 
 Windows ARP discovery uses the native [SendARP API](https://learn.microsoft.com/en-us/windows/win32/api/iphlpapi/nf-iphlpapi-sendarp)
 with a selected source address, so this path does not require Npcap. TCP checks
 also bind to that source. Linux uses Scapy ARP and requires raw-packet permission.
-Wi-Fi observations use `netsh wlan` on Windows or `nmcli` on Linux; adapter and
-OS permissions determine what is available. The app displays the original OS
-output instead of assuming locale-specific field names.
+Open **Network → Open Wi-Fi survey**, select a receiver and run one or three
+passes. Windows requests a WLAN refresh and labels cached results. Linux uses
+NetworkManager. The updated ESP32 firmware supplies a passive 2.4 GHz scan.
+One table row represents one BSSID, including access points with hidden or
+shared names. Receiver details show scan status and coverage for each pass.
 
 The **All tools** catalog is an implementation-status list, not a claim of
 full firmware parity. `PC` tools are implemented; `HARDWARE` tools need the
@@ -38,8 +40,9 @@ application backend exists yet, even if the original firmware contains it.
 BLE inventory comparison, bounded raw Wi-Fi observation, RF history/baseline,
 GPS via gpsd, and limited selected-target lab radio tests now have Pi backends.
 Their hardware requirements and remaining gaps are in `FEATURE-READINESS.md`.
-This is not a full port: wardriving, microSD/ADC, weather, captive portal and
-radio-disruption functions remain unavailable.
+The Wi-Fi position snapshot saves one passive ESP32 scan with overlapping
+positions from a co-located GPS receiver. MicroSD/ADC, weather and several
+radio functions still lack a port for this configuration.
 The original CYBERDECK firmware cannot be controlled by the FIIRBots serial
 protocol without an adapter or firmware changes. No hardware is simulated.
 

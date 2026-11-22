@@ -1,13 +1,21 @@
+from typing import Literal
+from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime
 from fastapi import APIRouter
 from pydantic import Field
 from .models import StrictModel
-from . import observation_tools, wireless_monitor, gps_observer, lab_radio
+from . import observation_tools, wireless_monitor, gps_observer, lab_radio, wifi_survey
 from .network_engine import ScanCancelled
 
 
 class CaptureRequest(StrictModel):
     interface: str = Field(min_length=1, max_length=64)
     duration_s: int = Field(default=10, ge=1, le=30)
+
+
+class WifiSurveyRequest(StrictModel):
+    receiver: Literal['both', 'host', 'esp32'] = 'both'
+    passes: Literal[1, 3] = 1
 
 
 class Enrollment(StrictModel):
@@ -49,6 +57,54 @@ def router(controller, operation):
     def idle():
         if controller.locked or (controller.worker and controller.worker.is_alive()):
             raise ValueError('Stop the current operation and release the hardware lock first')
+
+    @routes.post('/api/wifi/survey', status_code=202)
+    def survey(request: WifiSurveyRequest):
+        receivers = {'both': ['Host', 'ESP32'], 'host': ['Host'], 'esp32': ['ESP32']}[request.receiver]
+
+        def progress(index, receiver):
+            with controller.guard:
+                controller.job.update(message=f'Wi-Fi survey · pass {index} of {request.passes} · {receiver}')
+
+        def work(cancel):
+            result = wifi_survey.collect(controller.serial, receivers, request.passes, cancel, progress)
+            with controller.guard:
+                if cancel.is_set():
+                    raise ScanCancelled()
+                db.event('wifi', 'WIFI_SURVEY', result)
+
+        operation(lambda: controller.launch('Wi-Fi survey', work))
+        return {'status': 'STARTED'}
+
+    @routes.get('/api/wifi/survey/latest')
+    def latest_survey():
+        return observation_tools.latest(db, 'WIFI_SURVEY') or {'status': 'NOT_TESTED'}
+
+    @routes.post('/api/gps/wifi-snapshot', status_code=202)
+    def gps_wifi_snapshot():
+        def work(cancel):
+            with ThreadPoolExecutor(max_workers=1) as pool:
+                fixes = pool.submit(gps_observer.observe, cancel, 10)
+                start = datetime.fromisoformat(wifi_survey.timestamp())
+                scan = wifi_survey.esp_observation(controller.serial, cancel)
+                if scan['status'] != 'OUTPUT':
+                    raise ValueError(scan['message'])
+                end = datetime.fromisoformat(scan['observed_at'])
+                points = [p for p in fixes.result()['points']
+                          if start <= datetime.fromisoformat(p['time']) <= end]
+            if not points:
+                raise ValueError('No fresh GPS position overlapped the ESP32 scan')
+            with controller.guard:
+                if cancel.is_set():
+                    raise ScanCancelled()
+                db.event('gps', 'GPS_WIFI_SNAPSHOT', {'status': 'COMPLETE', 'receiver_positions': points,
+                         'started_at': start.isoformat(), 'scan': scan})
+        operation(lambda: controller.launch('GPS and Wi-Fi snapshot', work))
+        return {'status': 'STARTED'}
+
+    @routes.get('/api/gps/wifi-snapshot/latest')
+    def gps_wifi_latest():
+        return observation_tools.latest(db, 'GPS_WIFI_SNAPSHOT') or {'status': 'NOT_TESTED'}
 
     @routes.get('/api/wireless/interfaces')
     def interfaces():
@@ -114,13 +170,14 @@ def router(controller, operation):
                 sample = controller.serial.snapshot()
                 if not sample.get('connected') or sample.get('status') != 'OK' or not observation_tools.valid_bins(sample.get('rf_bins')):
                     raise ValueError('A fresh RF sample from the connected ESP32 is required')
-                db.event('nRF24', 'RF_BASELINE', {'bins': sample['rf_bins'], 'received_at': sample['received_at']})
+                db.event('nRF24', 'RF_BASELINE', {'bins': sample['rf_bins'], 'received_at': sample['received_at'],
+                                                  'rf_dwell_us': sample.get('rf_dwell_us')})
             return {'status': 'SAVED'}
         return operation(save)
 
     @routes.get('/api/tools/export')
     def export():
-        return {'wireless': wireless_latest(), 'ble': ble_defense(), 'rf': rf_history(), 'gps': gps_latest(), 'lab_test': lab_latest(), 'lab_beacon': lab_beacon_latest()}
+        return {'wifi_survey': latest_survey(), 'wireless': wireless_latest(), 'ble': ble_defense(), 'rf': rf_history(), 'gps': gps_latest(), 'lab_test': lab_latest(), 'lab_beacon': lab_beacon_latest()}
 
     @routes.post('/api/lab/deauth', status_code=202)
     def lab_deauth(request: LabDeauthRequest):

@@ -18,11 +18,22 @@ class LinuxWifiTests(unittest.TestCase):
         return result, run
 
     def test_wifi_preserves_os_observations(self):
-        output = b'SSID BSSID CHAN SIGNAL SECURITY\nLAB aa:bb:cc:dd:ee:ff 6 80 WPA2'
+        # Synthetic observations. The same SSID can refer to multiple radios.
+        output = (rb'wlan0:aa\:bb\:cc\:dd\:ee\:01:4C4142:6:2437 MHz:80:WPA2:(none):psk' + b'\n'
+                  + rb'wlan0:aa\:bb\:cc\:dd\:ee\:02:4C4142:36:5180 MHz:2:WPA2:(none):psk' + b'\n'
+                  + rb'wlan1:aa\:bb\:cc\:dd\:ee\:02::36:5180 MHz:0::(none):(none)')
         result, run = self.observe(return_value=SimpleNamespace(
             returncode=0, stdout=output, stderr=b''))
         self.assertEqual(result['status'], 'OUTPUT')
         self.assertEqual(result['output'], output.decode())
+        rows = result['access_points']
+        self.assertEqual([row['ssid'] for row in rows], ['LAB', 'LAB', ''])
+        self.assertEqual(rows[1]['bssid'], 'AA:BB:CC:DD:EE:02')
+        self.assertEqual(rows[1]['frequency_mhz'], 5180)
+        self.assertEqual(rows[2]['interface'], 'wlan1')
+        self.assertEqual(rows[2]['signal_percent'], 0)
+        self.assertEqual(rows[2]['security'], 'Open')
+        self.assertIsNone(rows[2]['rssi_dbm'])
         self.assertEqual(run.call_args.args[0][0], 'nmcli')
         self.assertNotIn('shell', run.call_args.kwargs)
 
@@ -37,6 +48,33 @@ class LinuxWifiTests(unittest.TestCase):
             with self.subTest(error=type(error).__name__):
                 result, _ = self.observe(side_effect=error)
                 self.assertEqual(result['status'], 'UNAVAILABLE')
+
+    def test_empty_requires_an_available_wifi_adapter(self):
+        empty = SimpleNamespace(returncode=0, stdout=b'', stderr=b'')
+        for state, expected in [(b'wifi:disconnected', 'OUTPUT'), (b'wifi:unavailable', 'UNAVAILABLE'),
+                                (b'ethernet:connected', 'UNAVAILABLE')]:
+            devices = SimpleNamespace(returncode=0, stdout=state, stderr=b'')
+            with self.subTest(state=state):
+                result, _ = self.observe(side_effect=[empty, devices])
+                self.assertEqual(result['status'], expected)
+
+    def test_partial_and_unreadable_are_explicit(self):
+        output = rb'i\:1:00\:00\:00\:00\:00\:0a:FF:1:2412 MHz:35::(none):unknown' + b'\ninvalid'
+        result, _ = self.observe(return_value=SimpleNamespace(returncode=0, stdout=output, stderr=b''))
+        self.assertEqual(result['status'], 'PARTIAL')
+        point, = result['access_points']
+        self.assertEqual(point['interface'], 'i:1')
+        self.assertEqual(point['ssid_hex'], 'FF')
+        self.assertIsNone(point['ssid'])
+        self.assertIsNone(point['security'])
+
+    def test_dense_scan_is_not_clipped(self):
+        output = '\n'.join(fr'wlan0:aa\:bb\:cc\:dd\:{i // 256:02x}\:{i % 256:02x}:41:6:2437 MHz:1:WPA2:(none):psk'
+                           for i in range(1000)).encode()
+        self.assertGreater(len(output), 50000)
+        result, _ = self.observe(return_value=SimpleNamespace(returncode=0, stdout=output, stderr=b''))
+        self.assertEqual(len(result['access_points']), 1000)
+        self.assertEqual(result['output'], output.decode())
 
 
 class LinuxDiscoveryTests(unittest.TestCase):
