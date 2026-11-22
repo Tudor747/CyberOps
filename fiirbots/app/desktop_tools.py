@@ -45,6 +45,18 @@ def validate_selection(network, interface):
     return matches[0]['address']
 
 
+def retain_wifi_cache(result, cache):
+    for row in result['access_points']:
+        cache.pop((row['interface'], row['bssid']), None)
+    if cache:
+        result['access_points'].extend(cache.values())
+        result['scan_mode'] += ' + prior cache'
+        result['message'] += f' {len(cache)} additional cached rows (last seen unknown).'
+        if result['status'] == 'UNAVAILABLE':
+            result['status'] = 'PARTIAL'
+    return result
+
+
 def wifi_observation():
     system = platform.system()
     refresh = []
@@ -75,6 +87,21 @@ def wifi_observation():
                    'creationflags': getattr(subprocess, 'CREATE_NO_WINDOW', 0)}
     if system == 'Linux':
         run_options['env'] = {**os.environ, 'LC_ALL': 'C'}
+        # Requesting a refresh can replace a wider inventory with a smaller one.
+        # Save the existing entries first and distinguish them from the new listing.
+        try:
+            cached = subprocess.run([*command[:-1], 'no'], **{**run_options, 'timeout': 5})
+            if cached.returncode == 0:
+                rows, _ = wifi_inventory.nm_access_points(cached.stdout.decode('utf-8', errors='replace'))
+                cache_read_at = datetime.now(timezone.utc).isoformat()
+                cache = {(row['interface'], row['bssid']): {**row, 'from_cache': True, 'cache_read_at': cache_read_at}
+                         for row in rows}
+            else:
+                cache = {}
+        except (OSError, subprocess.TimeoutExpired):
+            cache = {}
+    else:
+        cache = {}
     try:
         proc = subprocess.run(command, **run_options)
         encoding = 'oem' if os.name == 'nt' and system == 'Windows' else 'utf-8'
@@ -84,7 +111,7 @@ def wifi_observation():
         result['observed_at'] = datetime.now(timezone.utc).isoformat()
         if proc.returncode:
             result['message'] = 'The adapter inventory failed. Check the OS output and permissions.' + refresh_note
-            return result
+            return retain_wifi_cache(result, cache)
         if system == 'Windows':
             points, malformed, confirmed_empty = wifi_inventory.netsh_access_points(output)
         else:
@@ -107,7 +134,7 @@ def wifi_observation():
             result['message'] = 'No usable adapter inventory. Check radio availability, permissions and OS output.' + refresh_note
     except (OSError, subprocess.TimeoutExpired) as exc:
         result['message'] = f'Wi-Fi command unavailable or timed out ({exc}).' + refresh_note
-    return result
+    return retain_wifi_cache(result, cache)
 
 
 def system_status(storage_path):

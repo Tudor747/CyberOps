@@ -284,13 +284,16 @@ function renderWifiSurvey(result) {
     const fallback = ap.samples.some(s => s.ssid === '') ? 'Hidden name' : 'Name unavailable';
     cell(row, ap.ssids.join(' / ') || fallback).append(element('small', ap.bssid));
     const readings = new Map();
-    for (const s of ap.samples) readings.set(JSON.stringify([s.source, s.interface]), s);
+    for (const s of ap.samples) {
+      const key = JSON.stringify([s.source, s.interface]);
+      if (!s.from_cache || !readings.has(key) || readings.get(key).from_cache) readings.set(key, s);
+    }
     const channels = new Set(), security = new Set();
     const channelCell = cell(row, ''), signalCell = cell(row, '');
     for (const s of readings.values()) {
       if (s.channel != null) channels.add(s.channel + (s.frequency_mhz ? ' · ' + s.frequency_mhz + ' MHz' : ''));
       const signal = s.rssi_dbm != null ? s.rssi_dbm + ' dBm' : s.signal_percent != null ? s.signal_percent + '%' : 'Unavailable';
-      signalCell.append(element('div', signal + ' · ' + [s.source, s.interface].filter(Boolean).join(' / ')));
+      signalCell.append(element('div', signal + ' · ' + [s.source, s.interface].filter(Boolean).join(' / ') + (s.from_cache ? ' · cached' : '')));
     }
     for (const s of ap.samples) if (s.security) security.add(s.security);
     channelCell.textContent = [...channels].join(' / ') || 'Unknown';

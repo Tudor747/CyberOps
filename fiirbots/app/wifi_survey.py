@@ -77,7 +77,7 @@ def summarize(observations):
     for batch in observations:
         for ap in batch['access_points']:
             by_bssid[ap['bssid'].upper()].append({**ap, 'source': batch['source'], 'pass': batch['pass'],
-                                                  'observed_at': batch.get('observed_at')})
+                                                  'observed_at': None if ap.get('from_cache') else batch.get('observed_at')})
     points = []
     names = defaultdict(set)
     open_count = wep_count = 0

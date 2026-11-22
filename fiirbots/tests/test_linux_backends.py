@@ -55,8 +55,19 @@ class LinuxWifiTests(unittest.TestCase):
                                 (b'ethernet:connected', 'UNAVAILABLE')]:
             devices = SimpleNamespace(returncode=0, stdout=state, stderr=b'')
             with self.subTest(state=state):
-                result, _ = self.observe(side_effect=[empty, devices])
+                result, _ = self.observe(side_effect=[empty, empty, devices])
                 self.assertEqual(result['status'], expected)
+
+    def test_rescan_keeps_extra_cached_access_points(self):
+        connected = rb'wlan0:aa\:bb\:cc\:dd\:ee\:01:41:6:2437 MHz:80:WPA2:(none):psk'
+        nearby = rb'wlan0:aa\:bb\:cc\:dd\:ee\:02:42:36:5180 MHz:20:WPA2:(none):psk'
+        result, run = self.observe(side_effect=[
+            SimpleNamespace(returncode=0, stdout=connected + b'\n' + nearby, stderr=b''),
+            SimpleNamespace(returncode=0, stdout=connected, stderr=b''),
+        ])
+        self.assertEqual([call.args[0][-1] for call in run.call_args_list], ['no', 'yes'])
+        self.assertEqual(len(result['access_points']), 2)
+        self.assertTrue(result['access_points'][1]['from_cache'])
 
     def test_partial_and_unreadable_are_explicit(self):
         output = rb'i\:1:00\:00\:00\:00\:00\:0a:FF:1:2412 MHz:35::(none):unknown' + b'\ninvalid'
