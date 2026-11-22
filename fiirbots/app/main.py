@@ -154,6 +154,8 @@ def create_app(settings=None):
                 'retests': controller.db.rows('SELECT * FROM remediation_logs ORDER BY id DESC LIMIT 100')}
 
     app.include_router(router(controller, operation))
+    from .industrial import industrial_routes
+    app.include_router(industrial_routes(controller, operation))
     return app
 
 

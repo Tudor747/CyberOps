@@ -168,6 +168,7 @@ $('test-history-refresh').onclick=async()=>{
   }catch(error){toast(error.message);}
 };
 chooseComponent('rfid');
+if (location.hash === '#network') tab('network');
 poll();
 
 $('ai-check').onclick=async()=>{

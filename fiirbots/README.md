@@ -2,6 +2,21 @@
 
 ## Cyberdeck dashboard
 
+### Portrait touchscreen on Raspberry Pi
+
+Run `sudo bash deploy/install.sh` from the project directory. Open
+**FIIRBots Touch** on the Pi desktop. The Python client uses the local FIIRBots
+service. **Wi-Fi** lists nearby access points. **Assets** inventories the
+configured LAN and lets an operator enter zone, model, firmware and criticality.
+**Report** opens a printable assessment with observed port evidence and review
+actions. In the asset editor, touch a text field, then press **Keyboard** to type
+on the screen.
+
+The installer creates the desktop shortcut and disables its previous browser
+kiosk autostart entry by default. Reboot after updating a Pi already running the
+browser kiosk. Set `FIIRBOTS_BROWSER_KIOSK=1` when running the installer to opt
+into the browser kiosk.
+
 ### Test on a Windows PC without Raspberry Pi
 
 Run `./start-preview.ps1`, open `http://127.0.0.1:8000`, and reload the page
@@ -200,14 +215,14 @@ GEMINI_MODEL=gemini-2.5-flash
 
 The installer deliberately leaves the subnet empty until you configure it. Only private IPv4 ranges with at most 256 addresses are accepted. Use an on-link subnet on the selected interface; the included ARP discovery is not a routed-network inventory tool. For a stable serial path, prefer the ESP32's `/dev/serial/by-id/...` entry if present.
 
-The installer enables **Desktop Autologin** for your existing desktop user through `raspi-config` and adds the kiosk launcher to that user's `~/.config/labwc/autostart`. If running as root directly, pass the desktop username to `install.sh`. The UI waits for the local server and reopens Chromium if it exits.
+The installer enables **Desktop Autologin** for your existing desktop user through `raspi-config` and installs the FIIRBots Touch shortcut. If running as root directly, pass the desktop username to `install.sh`.
 
 ```bash
 sudo systemctl restart fiirbots
 sudo reboot
 ```
 
-The Pi now starts the server and opens the dashboard full-screen automatically, including after an S1 reboot. The service runs as the dedicated `fiirbots` user with serial/GPIO group access and raw-packet capability. A narrowly scoped sudoers rule permits only `/usr/bin/systemctl reboot`. The web server listens on loopback and uses a per-process action token; it is not intended to be exposed directly to the LAN or Internet.
+The Pi now starts the server automatically, including after an S1 reboot. Open the touchscreen client from the desktop. The service runs as the dedicated `fiirbots` user with serial/GPIO group access and raw-packet capability. A narrowly scoped sudoers rule permits only `/usr/bin/systemctl reboot`. The web server listens on loopback and uses a per-process action token; it is not intended to be exposed directly to the LAN or Internet.
 
 Touch-only text entry requires the Raspberry Pi desktop's on-screen keyboard, or a USB keyboard for initial enrollment. The five buttons support navigation and actions, not arbitrary text entry.
 

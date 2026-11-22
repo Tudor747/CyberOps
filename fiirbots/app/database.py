@@ -4,6 +4,9 @@ from contextlib import contextmanager
 from pathlib import Path
 
 SCHEMA = '''
+CREATE TABLE IF NOT EXISTS industrial_assets (
+ network TEXT NOT NULL, ip TEXT NOT NULL, profile TEXT NOT NULL,
+ PRIMARY KEY (network, ip));
 CREATE TABLE IF NOT EXISTS baseline_inventory (
  id INTEGER PRIMARY KEY, device_ip TEXT UNIQUE NOT NULL, mac_address TEXT,
  device_name TEXT, role TEXT, authorized_ports TEXT,

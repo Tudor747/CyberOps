@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=FIIRBots Touch
+Comment=OT and IIoT field assessment
+Exec=/usr/bin/python3 /opt/fiirbots/desktop.py
+Icon=network-wireless
+Terminal=false

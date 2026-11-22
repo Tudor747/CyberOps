@@ -15,7 +15,7 @@ project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
 apt-get update
 # lgpio may build from source (for example Python 3.13 on aarch64).
 # Its SWIG wrapper links against the system liblgpio development library.
-apt-get install -y python3-venv python3-dev build-essential swig liblgpio-dev chromium curl rsync sudo
+apt-get install -y python3-venv python3-dev python3-tk build-essential swig liblgpio-dev chromium curl rsync sudo
 getent group gpio >/dev/null || groupadd --system gpio
 id fiirbots >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/fiirbots --shell /usr/sbin/nologin fiirbots
 usermod -a -G dialout,gpio fiirbots
@@ -38,16 +38,26 @@ chmod 440 /etc/sudoers.d/fiirbots-reboot
 visudo -cf /etc/sudoers.d/fiirbots-reboot
 install -m 644 /opt/fiirbots/deploy/fiirbots.service /etc/systemd/system/fiirbots.service
 chmod 755 /opt/fiirbots/deploy/kiosk.sh
-# labwc autostart is used by current Raspberry Pi OS desktop images.
+desktop_dir=$(runuser -u "$desktop_user" -- xdg-user-dir DESKTOP 2>/dev/null || true)
+desktop_dir=${desktop_dir:-"$desktop_home/Desktop"}
+install -d -o "$desktop_user" -g "$(id -gn "$desktop_user")" "$desktop_dir"
+install -m 755 -o "$desktop_user" -g "$(id -gn "$desktop_user")" \
+    /opt/fiirbots/deploy/fiirbots-touch.desktop "$desktop_dir/FIIRBots Touch.desktop"
+# Retain the browser kiosk as an opt-in for deployments that need it.
 install -d -o "$desktop_user" -g "$(id -gn "$desktop_user")" "$desktop_home/.config/labwc"
 autostart="$desktop_home/.config/labwc/autostart"
 if [[ ! -e "$autostart" && -f /etc/xdg/labwc/autostart ]]; then cp /etc/xdg/labwc/autostart "$autostart"; fi
 touch "$autostart"
-grep -Fq '/opt/fiirbots/deploy/kiosk.sh' "$autostart" || printf '\n/opt/fiirbots/deploy/kiosk.sh &\n' >> "$autostart"
+if [[ ${FIIRBOTS_BROWSER_KIOSK:-0} == 1 ]]; then
+    grep -Fxq '/opt/fiirbots/deploy/kiosk.sh &' "$autostart" || printf '\n/opt/fiirbots/deploy/kiosk.sh &\n' >> "$autostart"
+else
+    sed -i '\|^/opt/fiirbots/deploy/kiosk\.sh &$|d' "$autostart"
+fi
 chown "$desktop_user:$(id -gn "$desktop_user")" "$autostart"
 env SUDO_USER="$desktop_user" raspi-config nonint do_boot_behaviour B4
 systemctl daemon-reload
 systemctl enable --now fiirbots.service
+systemctl restart fiirbots.service
 echo 'Installed. Edit /etc/fiirbots.env for the subnet, interface, serial device and optional Gemini key.'
-echo 'Desktop autologin and kiosk startup are enabled. Reboot after completing configuration.'
+echo 'Open FIIRBots Touch from the desktop. Reboot to apply desktop autostart changes.'
 echo 'After configuration changes: sudo systemctl restart fiirbots'

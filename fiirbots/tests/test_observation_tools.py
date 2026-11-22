@@ -83,6 +83,25 @@ class ToolAPITests(unittest.TestCase):
         self.headers = {'X-FIIRBots-Token': token}
         self.controller = self.app.state.controller
 
+    def test_industrial_assessment_links_profiles_to_matching_completed_lan_scan(self):
+        self.controller.settings.network = '192.168.50.0/24'
+        asset = {'ip': '192.168.50.10', 'name': '<Robot>', 'zone': 'Cell A',
+                 'role': 'Robot controller', 'criticality': 'High'}
+        self.assertEqual(self.client.put('/api/industrial/assets', json=asset, headers=self.headers).status_code, 200)
+        rejected = {**asset, 'ip': '192.168.51.10'}
+        self.assertEqual(self.client.put('/api/industrial/assets', json=rejected, headers=self.headers).status_code, 409)
+        db = self.controller.db
+        db.execute("INSERT INTO scan_batches(id,network,status) VALUES('ot',?,'RUNNING')",
+                   (self.controller.settings.network,))
+        db.save_scan('ot', [{'device_ip': asset['ip'], 'open_ports': [443],
+                             'detected_services': {}, 'status': 'UNAUTHORIZED'}])
+        row, = self.client.get('/api/industrial/assessment').json()['assets']
+        self.assertEqual(row['open_ports'], [443])
+        self.assertEqual(row['priority'], 'High review')
+        self.assertIn('&lt;Robot&gt;', self.client.get('/api/industrial/report').text)
+        self.controller.settings.network = '192.168.51.0/24'
+        self.assertEqual(self.client.get('/api/industrial/assessment').json()['assets'], [])
+
     def seed_ble(self):
         self.controller.db.event('bluetooth', 'BLE_SCAN', {'status': 'COMPLETE', 'devices': [
             {'address': 'AA:BB:CC:DD:EE:FF', 'name': 'Lab', 'service_uuids': ['1234'], 'rssi_dbm': -50}]})
