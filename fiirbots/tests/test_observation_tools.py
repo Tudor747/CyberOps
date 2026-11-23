@@ -1,4 +1,3 @@
-import json
 import re
 import tempfile
 import threading
@@ -137,16 +136,24 @@ class ToolAPITests(unittest.TestCase):
         self.controller.db.event('nRF24', 'RF_SWEEP', {'bins': [3]*81})
         result = self.client.get('/api/rf/history').json()
         self.assertEqual(len(result['samples']), 1)
-        self.assertEqual(result['delta'], [2]*81)
+        self.assertIsNone(result['delta'])  # Both saved dwells are unknown.
         self.controller.db.event('nRF24', 'RF_SWEEP', {'bins': [3]*81, 'rf_dwell_us': 200})
         self.assertIsNone(self.client.get('/api/rf/history').json()['delta'])
+        for baseline, expected in [
+            ({'bins': [1]*81, 'rf_dwell_us': 150}, None),
+            ({'bins': [1]*80, 'rf_dwell_us': 200}, None),
+            ({'bins': [1]*81, 'rf_dwell_us': 200}, [2]*81),
+        ]:
+            self.controller.db.event('nRF24', 'RF_BASELINE', baseline)
+            self.assertEqual(self.client.get('/api/rf/history').json()['delta'], expected)
 
     def test_wifi_survey_keeps_shared_names_and_unavailable_receiver(self):
         # Synthetic OS inventory with two BSSIDs sharing the same name.
         rows = [{'ssid': 'Lab', 'bssid': '02:00:00:00:00:' + suffix, 'security': security}
                 for suffix, security in [('01', 'Open'), ('02', 'WPA2')]]
         fixture = {'access_points': rows + rows[:1], 'source': 'Host', 'status': 'OUTPUT'}
-        with patch('app.desktop_tools.wifi_observation', return_value=fixture):
+        with patch('app.desktop_tools.pi_driver_observation', return_value=None), \
+             patch('app.desktop_tools.wifi_observation', return_value=fixture):
             response = self.client.post('/api/wifi/survey', headers=self.headers, json={'receiver': 'both', 'passes': 1})
             self.assertEqual(response.status_code, 202)
             self.controller.worker.join(2)
@@ -189,6 +196,20 @@ class ToolAPITests(unittest.TestCase):
         with patch.object(link, 'snapshot', return_value={'connected': True}), patch.object(link, 'request', side_effect=reply):
             result = esp_observation(link, threading.Event())
         self.assertEqual(len(result['access_points']), 37)
+
+    def test_esp_survey_rejects_boolean_page_offset_and_releases_scan(self):
+        from app.wifi_survey import esp_observation
+        def reply(command, scan_id, **_):
+            if command == 'WIFI_SCAN_CANCEL':
+                return {'status': 'STOPPED'}
+            return dict(status='WIFI_SCAN', scan_id=scan_id, state='complete', offset=False,
+                        total=0, networks=[], next_offset=None)
+        link = self.controller.serial
+        with patch.object(link, 'snapshot', return_value={'connected': True}), \
+             patch.object(link, 'request', side_effect=reply) as request:
+            result = esp_observation(link, threading.Event())
+        self.assertEqual(result['status'], 'UNAVAILABLE')
+        self.assertEqual(request.call_args.args, ('WIFI_SCAN_CANCEL',))
 
     def test_wireless_job_saves_result_and_exports(self):
         result = {'status': 'COMPLETE', 'counts': {'beacon': 3}}

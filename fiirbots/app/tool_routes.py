@@ -1,10 +1,11 @@
 from typing import Literal
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
+import os
 from fastapi import APIRouter
 from pydantic import Field
 from .models import StrictModel
-from . import observation_tools, wireless_monitor, gps_observer, lab_radio, wifi_survey
+from . import observation_tools, wireless_monitor, gps_observer, wifi_survey
 from .network_engine import ScanCancelled
 
 
@@ -52,6 +53,7 @@ class LabBeaconRequest(StrictModel):
 
 def router(controller, operation):
     routes = APIRouter()
+    lab_actions = APIRouter()
     db = controller.db
 
     def idle():
@@ -179,7 +181,7 @@ def router(controller, operation):
     def export():
         return {'wifi_survey': latest_survey(), 'wireless': wireless_latest(), 'ble': ble_defense(), 'rf': rf_history(), 'gps': gps_latest(), 'lab_test': lab_latest(), 'lab_beacon': lab_beacon_latest()}
 
-    @routes.post('/api/lab/deauth', status_code=202)
+    @lab_actions.post('/api/lab/deauth', status_code=202)
     def lab_deauth(request: LabDeauthRequest):
         def start():
             with controller.guard:
@@ -206,7 +208,7 @@ def router(controller, operation):
     def lab_latest():
         return observation_tools.latest(db, 'LAB_DEAUTH_RESULT') or {'status': 'NOT_TESTED', 'effect': 'UNVERIFIED'}
 
-    @routes.post('/api/lab/beacon', status_code=202)
+    @lab_actions.post('/api/lab/beacon', status_code=202)
     def lab_beacon(request: LabBeaconRequest):
         def start():
             with controller.guard:
@@ -267,4 +269,7 @@ def router(controller, operation):
                 'SELECT payload_data FROM hardware_events WHERE event_type=? ORDER BY id DESC LIMIT 100', (kind,))]
         return gps_observer.geojson(history('GPS_TRACK'), history('GPS_WAYPOINT'))
 
+    if os.getenv('FIIRBOTS_OBSERVATION_ONLY') != '1':
+        from . import lab_radio
+        routes.include_router(lab_actions)
     return routes

@@ -17,3 +17,31 @@ main{padding:24px;max-width:1600px}.page-head{margin-bottom:20px}h1{font-size:25
 .job-banner{border:1px solid #476332;background:#182419;color:#c3e4a6;border-radius:4px;padding:10px 12px;margin-bottom:12px;font:11px/1.5 Consolas,monospace;overflow-wrap:anywhere}
 
 .observation-panel{margin:14px 0;min-width:0}.observation-panel pre,#ble-output{white-space:pre-wrap;overflow-wrap:anywhere;max-height:320px;overflow:auto;font:11px/1.6 Consolas,monospace}.observation-panel form{max-width:500px}.ble-row{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:8px 0;overflow-wrap:anywhere}.ble-row span{min-width:0}#rf-waterfall{display:block;width:100%;height:180px;background:#0b1119}.observation-panel .actions{flex-wrap:wrap}
+
+/* Portrait controls for the Pi desktop launcher. */
+@media (orientation: portrait) {
+  .touch-layout .shell { display: block; height: auto; min-height: calc(100dvh - 78px); }
+  .touch-layout nav {
+    position: sticky;
+    top: 0;
+    z-index: 5;
+    width: auto;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
+    padding: 6px;
+    background: var(--bg);
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .touch-layout .nav { justify-content: center; font-size: 12px; }
+  .touch-layout .nav span, .touch-layout .nav-bottom { display: none; }
+  .touch-layout button, .touch-layout .button, .touch-layout select { min-height: 52px; }
+  .touch-layout .actions > button, .touch-layout .actions > .button { flex-grow: 1; }
+  .touch-layout input { min-height: 48px; }
+  .touch-layout main { overflow: visible; padding: 12px; }
+  .touch-layout .module-grid, .touch-layout .tool-catalog { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .touch-layout .view > article { min-width: 0; }
+  .touch-layout .panel { scroll-margin-top: 130px; }
+  .touch-layout dialog { width: calc(100% - 24px); max-width: 440px; }
+}

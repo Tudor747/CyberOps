@@ -2,8 +2,8 @@
 set -euo pipefail
 if [[ $(id -u) -ne 0 ]]; then echo 'Run: sudo bash deploy/install.sh'; exit 1; fi
 if [[ $(uname -m) != aarch64 ]]; then echo 'Requires Raspberry Pi OS 64-bit (aarch64).'; exit 1; fi
-if ! command -v labwc >/dev/null || ! command -v raspi-config >/dev/null || [[ ! -e /etc/init.d/lightdm ]]; then
-    echo 'Install Raspberry Pi OS with Desktop (labwc / LightDM) before running this installer.'; exit 1
+if ! command -v raspi-config >/dev/null || [[ ! -e /etc/init.d/lightdm ]]; then
+    echo 'Install Raspberry Pi OS with Desktop and LightDM before running this installer.'; exit 1
 fi
 desktop_user=${1:-${SUDO_USER:-}}
 if [[ -z "$desktop_user" || "$desktop_user" == root ]]; then
@@ -12,17 +12,24 @@ fi
 desktop_home=$(getent passwd "$desktop_user" | cut -d: -f6)
 if [[ -z "$desktop_home" || ! -d "$desktop_home" ]]; then echo 'Desktop user not found.'; exit 1; fi
 project_dir=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)
-apt-get update
 # lgpio may build from source (for example Python 3.13 on aarch64).
 # Its SWIG wrapper links against the system liblgpio development library.
-apt-get install -y python3-venv python3-dev python3-tk build-essential swig liblgpio-dev chromium curl rsync sudo iw
+packages=(python3-venv python3-dev python3-tk build-essential swig liblgpio-dev chromium curl rsync sudo iw network-manager bluez wlr-randr x11-xserver-utils)
+missing=()
+for package in "${packages[@]}"; do
+    if [[ $(dpkg-query -W -f='${Status}' "$package" 2>/dev/null) != 'install ok installed' ]]; then missing+=("$package"); fi
+done
+if (( ${#missing[@]} )); then
+    apt-get update
+    apt-get install -y "${missing[@]}"
+fi
 getent group gpio >/dev/null || groupadd --system gpio
 id fiirbots >/dev/null 2>&1 || useradd --system --user-group --home-dir /var/lib/fiirbots --shell /usr/sbin/nologin fiirbots
 usermod -a -G dialout,gpio fiirbots
 install -d -o fiirbots -g fiirbots -m 700 /var/lib/fiirbots
 install -d -m 755 /opt/fiirbots
 if [[ "$project_dir" != /opt/fiirbots ]]; then
-    rsync -a --exclude=.venv --exclude=.pio --exclude=.git --exclude=.env --exclude=data --exclude=__pycache__ \
+    rsync -a --chown=root:root --chmod=D755,Fu+rw,Fgo+r --exclude=.venv --exclude=.pio --exclude=.git --exclude=.env --exclude=data --exclude=test-results --exclude=__pycache__ \
         "$project_dir/" /opt/fiirbots/
 fi
 python3 -m venv /opt/fiirbots/.venv
@@ -40,27 +47,29 @@ printf '%s\n' 'fiirbots ALL=(root) NOPASSWD: /usr/sbin/iw dev wlan0 scan' > /etc
 chmod 440 /etc/sudoers.d/fiirbots-wifi
 visudo -cf /etc/sudoers.d/fiirbots-wifi
 install -m 644 /opt/fiirbots/deploy/fiirbots.service /etc/systemd/system/fiirbots.service
-chmod 755 /opt/fiirbots/deploy/kiosk.sh
+chmod 755 /opt/fiirbots/deploy/kiosk.sh /opt/fiirbots/deploy/touch-web.sh
+install -Dm644 /opt/fiirbots/deploy/fiirbots-touch.desktop /usr/local/share/applications/fiirbots-touch.desktop
 desktop_dir=$(runuser -u "$desktop_user" -- xdg-user-dir DESKTOP 2>/dev/null || true)
 desktop_dir=${desktop_dir:-"$desktop_home/Desktop"}
 install -d -o "$desktop_user" -g "$(id -gn "$desktop_user")" "$desktop_dir"
 install -m 755 -o "$desktop_user" -g "$(id -gn "$desktop_user")" \
     /opt/fiirbots/deploy/fiirbots-touch.desktop "$desktop_dir/FIIRBots Touch.desktop"
-# Retain the browser kiosk as an opt-in for deployments that need it.
-install -d -o "$desktop_user" -g "$(id -gn "$desktop_user")" "$desktop_home/.config/labwc"
+# Migrate the previous labwc-only launcher to Raspberry Pi OS desktop autostart.
 autostart="$desktop_home/.config/labwc/autostart"
-if [[ ! -e "$autostart" && -f /etc/xdg/labwc/autostart ]]; then cp /etc/xdg/labwc/autostart "$autostart"; fi
-touch "$autostart"
-if [[ ${FIIRBOTS_BROWSER_KIOSK:-0} == 1 ]]; then
-    grep -Fxq '/opt/fiirbots/deploy/kiosk.sh &' "$autostart" || printf '\n/opt/fiirbots/deploy/kiosk.sh &\n' >> "$autostart"
-else
-    sed -i '\|^/opt/fiirbots/deploy/kiosk\.sh &$|d' "$autostart"
+if [[ -f "$autostart" ]]; then
+    runuser -u "$desktop_user" -- sed -i -e '\|^/opt/fiirbots/deploy/kiosk\.sh &$|d' \
+        -e '\|^/opt/fiirbots/deploy/touch-web\.sh --native &$|d' "$autostart"
 fi
-chown "$desktop_user:$(id -gn "$desktop_user")" "$autostart"
+runuser -u "$desktop_user" -- mkdir -p "$desktop_home/.config/autostart"
+entry="$desktop_home/.config/autostart/fiirbots-touch.desktop"
+runuser -u "$desktop_user" -- cp /opt/fiirbots/deploy/fiirbots-touch.desktop "$entry"
+if [[ ${FIIRBOTS_BROWSER_KIOSK:-0} == 1 ]]; then
+    runuser -u "$desktop_user" -- sed -i 's|^Exec=.*|Exec=/opt/fiirbots/deploy/kiosk.sh|' "$entry"
+fi
 env SUDO_USER="$desktop_user" raspi-config nonint do_boot_behaviour B4
 systemctl daemon-reload
-systemctl enable --now fiirbots.service
+systemctl enable fiirbots.service
 systemctl restart fiirbots.service
 echo 'Installed. Edit /etc/fiirbots.env for the subnet, interface, serial device and optional Gemini key.'
-echo 'Open FIIRBots Touch from the desktop. Reboot to apply desktop autostart changes.'
+echo 'FIIRBots opens at desktop login. The desktop icon can also launch it now.'
 echo 'After configuration changes: sudo systemctl restart fiirbots'

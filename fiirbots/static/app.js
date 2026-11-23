@@ -1,4 +1,5 @@
 'use strict';
+if (new URLSearchParams(location.search).get('touch') === '1') document.body.classList.add('touch-layout');
 const $ = id => document.getElementById(id);
 const token = document.querySelector('meta[name="action-token"]').content;
 let state, cursor = 0, initializedEvents = false, toastTimer;

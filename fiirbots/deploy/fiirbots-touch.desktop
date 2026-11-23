@@ -2,6 +2,8 @@
 Type=Application
 Name=FIIRBots Touch
 Comment=OT and IIoT field assessment
-Exec=/usr/bin/python3 /opt/fiirbots/desktop.py
-Icon=network-wireless
+Exec=/bin/bash /opt/fiirbots/deploy/touch-web.sh --native
+Icon=/opt/fiirbots/deploy/fiirbots.svg
+Categories=Utility;Network;
+StartupNotify=false
 Terminal=false

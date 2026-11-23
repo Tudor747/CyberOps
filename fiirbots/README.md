@@ -4,18 +4,38 @@
 
 ### Portrait touchscreen on Raspberry Pi
 
-Run `sudo bash deploy/install.sh` from the project directory. Open
-**FIIRBots Touch** on the Pi desktop. The Python client uses the local FIIRBots
-service. **Wi-Fi** lists nearby access points. **Assets** inventories the
-configured LAN and lets an operator enter zone, model, firmware and criticality.
-**Report** opens a printable assessment with observed port evidence and review
-actions. In the asset editor, touch a text field, then press **Keyboard** to type
-on the screen.
+Run `sudo bash deploy/install.sh` from the project directory. **FIIRBots Touch**
+opens fullscreen at desktop login after boot. The desktop icon and application
+menu also open the native Python interface. **Tools → Close window** returns to the desktop.
 
-The installer creates the desktop shortcut and disables its previous browser
-kiosk autostart entry by default. Reboot after updating a Pi already running the
-browser kiosk. Set `FIIRBOTS_BROWSER_KIOSK=1` when running the installer to opt
-into the browser kiosk.
+- **Wi-Fi** surveys visible access points with the Pi and the ESP32 by default.
+  Choose a receiver and one or three passes. Each access point includes the receiver,
+  signal, advertised security, and cache or observation time. A failed receiver
+  has its own status. Channel coverage depends on the adapter, firmware, and region.
+- **Assets → LAN settings** selects the connected private subnet for discovery and
+  service checks. Open ports and inventory changes are evidence for review.
+- **Tools** includes Bluetooth LE scanning and enrollment, RF spectrum history and
+  baseline, Wi-Fi frame monitoring on an existing monitor interface, GPS tracks,
+  GeoJSON export, GPS/Wi-Fi snapshots, peripheral diagnostics, and system info.
+  The installed Pi service exposes the observation tools. Board-specific tools
+  and remaining hardware requirements are documented in `FEATURE-READINESS.md`.
+- **Report → Save report** writes the segment assessment and latest Wi-Fi survey to
+  `~/FIIRBots Reports`. Each section identifies its acquisition time when available.
+
+The launcher attempts to rotate a single active display
+90° counterclockwise in Wayland or X11. With multiple displays,
+set `FIIRBOTS_TOUCH_OUTPUT` to the touchscreen's output name when launching
+`bash /opt/fiirbots/deploy/touch-web.sh --native`. Run `wlr-randr` on Wayland
+or `xrandr --query` on X11 to list output names. The rotation applies to the desktop output.
+
+To launch the Python client without changing output orientation, use
+`/usr/bin/python3 /opt/fiirbots/desktop.py` from the graphical session.
+
+The installer enables desktop autologin, installs the local backend as a system
+service and creates `~/.config/autostart/fiirbots-touch.desktop`. The launched
+client retries while the backend starts. Scans begin when requested. Set
+`FIIRBOTS_BROWSER_KIOSK=1` when running the installer to select the browser
+kiosk at login.
 
 ### Test on a Windows PC without Raspberry Pi
 
@@ -53,7 +73,7 @@ full firmware parity. `PC` tools are implemented; `HARDWARE` tools need the
 FIIRBots ESP32 firmware and matching peripherals. `NOT_PORTED` means no working
 application backend exists yet, even if the original firmware contains it.
 BLE inventory comparison, bounded raw Wi-Fi observation, RF history/baseline,
-GPS via gpsd, and limited selected-target lab radio tests now have Pi backends.
+and GPS via gpsd have Pi backends.
 Their hardware requirements and remaining gaps are in `FEATURE-READINESS.md`.
 The Wi-Fi position snapshot saves one passive ESP32 scan with overlapping
 positions from a co-located GPS receiver. MicroSD/ADC, weather and several
@@ -102,8 +122,9 @@ failed scan shows the previous completed result with its timestamp.
 
 Install the updated requirements in the application's virtual environment.
 On Raspberry Pi, a working Bluetooth adapter, running BlueZ service and D-Bus
-permissions for the `fiirbots` service user are required. These have not yet been
-validated on the Pi. No adapter, blocked Bluetooth or denied permissions produce
+permissions for the `fiirbots` service user are required. The Pi installation
+verified on November 23, 2026 received 39 advertising addresses in one scan.
+A missing adapter, blocked Bluetooth or denied permissions produce
 an error, not a successful empty inventory. BLE addresses may rotate; this is
 discovery, not persistent identity. The separate BLE inventory panel adds explicit
 enrollment and comparison. Offline tests use a fake
@@ -111,7 +132,7 @@ scanner and do not demonstrate reception on hardware.
 
 Backend API reference: [BleakScanner](https://bleak.readthedocs.io/en/stable/api/scanner.html).
 
-### Observation and laboratory tools
+### Observation tools
 
 All tools now provides:
 
@@ -127,24 +148,17 @@ All tools now provides:
   Fresh fixes are stored as tracks; saved positions can become named waypoints.
   GeoJSON exports include up to 100 recent tracks and 100 waypoints. Course over
   ground is not a stationary magnetic compass.
-- A selected-client deauthentication lab test and a selected-probe KARMA beacon
-  test. Both require an isolated authorized lab, an observation no older than
-  five minutes and a working monitor/injection radio. Each request is limited to
-  1–10 frames on the observed channel. The KARMA port advertises one selected
-  SSID, like the reference beacon behavior; it is not a usable AP or portal.
-  Results record submissions to the driver and always leave the actual effect
-  unverified. Confirm reception/client behavior independently.
 
 These operations share the existing exclusive job controller and Stop/S1
 cancellation. Completed observations persist; cancelled observations do not
-replace them. Lab transmission attempts are logged even when cancelled or failed.
+replace them.
 The global job banner shows errors; saved results retain their original timestamps.
 Export observations using the JSON link or GPS tracks using GeoJSON.
 
 For an existing installation, copy the updated project and rerun the installer
 to update Python dependencies, then restart the service. BLE additionally needs
 BlueZ and D-Bus permissions for the service user; gpsd and its receiver must be
-configured separately. No Pi hardware acceptance has been performed here.
+configured separately. See `FEATURE-READINESS.md` for live verification and hardware gaps.
 
 API implementation references: [Scapy capture](https://scapy.readthedocs.io/en/latest/api/scapy.sendrecv.html),
 [802.11 layers](https://scapy.readthedocs.io/en/latest/api/scapy.layers.dot11.html),
@@ -160,7 +174,7 @@ API implementation references: [Scapy capture](https://scapy.readthedocs.io/en/l
 - Operator-triggered retest of a previously open port; results are OPEN, CLOSED, NO_RESPONSE or ERROR. A timeout is inconclusive, never proof of filtering or successful remediation.
 - USB serial polling, request correlation, validated samples, reconnection and stale-data handling. Missing sensors show unknown, not fabricated readings.
 - Physical navigation using J1–J4; S1 stops jobs and requests a Pi reboot. Held S1 at boot locks operations without another reboot. Scans never restart automatically.
-- A systemd service and Chromium kiosk launcher for automatic startup.
+- A systemd service and native Python touchscreen launcher for automatic startup.
 
 ## Layout
 
@@ -193,7 +207,7 @@ Open `http://127.0.0.1:8000`. GPIO, serial and reboot are disabled unless config
 
 ## Install on Raspberry Pi 5
 
-Use Raspberry Pi OS 64-bit **with Desktop and labwc**, with the 800×480 HDMI screen and its USB touch connection working first. Copy this `fiirbots` folder to the Pi, then run from it:
+Use Raspberry Pi OS 64-bit **with Desktop and LightDM**, with the 800×480 HDMI screen and its USB touch connection working first. Copy this `fiirbots` folder to the Pi, then run from it:
 
 ```bash
 sudo bash deploy/install.sh
@@ -317,7 +331,7 @@ ls /dev/serial/by-id/
 - **Scanning disabled:** configure the subnet, check S1/GPIO state and restart the service.
 - **Discovery error:** verify interface, on-link subnet and raw-packet capability. A failed/aborted scan does not commit a partial baseline comparison.
 - **Hardware unknown:** verify the USB device, flash the NodeMCU firmware, check module power/wiring and radar baud/output mode.
-- **Kiosk does not start:** verify Desktop Autologin, labwc desktop and `~/.config/labwc/autostart`. This installer does not target older X11/Wayfire sessions.
+- **Touch app does not start:** verify desktop autologin, the desktop session, and `~/.config/autostart/fiirbots-touch.desktop`. Launch **FIIRBots Touch** from the desktop to check the shortcut.
 - **S1 cannot reboot:** check the service log and the installed sudoers rule. Scans remain stopped even if reboot fails.
 
 Automated tests mock network/hardware/AI operations. A firmware build verifies compilation, not electrical operation. Physical sensor behavior, Pi GPIO, S1 reboot and boot-time kiosk startup must be checked on the assembled device. No live network scan, hardware flashing or Gemini request is performed by the test suite.

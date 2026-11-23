@@ -14,8 +14,15 @@ def iw_access_points(output):
         if not match:
             continue
         name = re.search(r'^\s*SSID: ?([^\r\n]*)', block, re.M)
+        ssid_bytes = None
+        if name:
+            # iw runs in the C locale and prints non-ASCII bytes and backslashes as \xHH.
+            ssid_bytes = re.sub(rb'\\x([0-9a-fA-F]{2})', lambda m: bytes.fromhex(m[1].decode('ascii')),
+                                name[1].encode('utf-8'))
         freq = re.search(r'^\s*freq: (\d+)(?:\.\d+)?', block, re.M)
         signal = re.search(r'^\s*signal: (-?\d+(?:\.\d+)?) dBm', block, re.M)
+        percent = re.search(r'^\s*signal: (\d{1,3})/100\b', block, re.M)
+        age = re.search(r'^\s*last seen: (\d{1,10}) ms ago\b', block, re.M)
         capability = re.search(r'^\s*capability: ([^\r\n]+)', block, re.M)
         frequency = int(freq[1]) if freq else None
         channel = None
@@ -38,8 +45,14 @@ def iw_access_points(output):
             advertised.append('RSN' + (' / ' + suites[1].strip() if suites else ''))
         if not advertised and capability:
             advertised.append('Privacy advertised' if 'Privacy' in capability[1].split() else 'Open')
-        points.append({'bssid': match[0].upper(), 'ssid': name[1] if name else None, 'interface': 'wlan0',
-                       'channel': channel, 'frequency_mhz': frequency, 'signal_percent': None,
+        ssid = None
+        if ssid_bytes is not None:
+            ssid = ssid_bytes.decode('utf-8', errors='backslashreplace') if any(ssid_bytes) else ''
+        points.append({'bssid': match[0].upper(), 'ssid': ssid, 'interface': 'wlan0',
+                       'ssid_hex': ssid_bytes.hex() if ssid_bytes is not None else None,
+                       'channel': channel, 'frequency_mhz': frequency,
+                       'signal_percent': _number(percent[1], maximum=100) if percent else None,
+                       'last_seen_ms_ago': int(age[1]) if age else None,
                        'rssi_dbm': float(signal[1]) if signal else None, 'security': ' · '.join(advertised) or None})
     return points
 

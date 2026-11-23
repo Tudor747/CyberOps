@@ -1,5 +1,49 @@
 # Full Cyberdeck integration readiness
 
+## Raspberry Pi desktop verification, 2026-11-23
+
+The installed Python client opened at 800×480 in the Pi's X11 session. After
+an actual reboot, the boot ID changed, the enabled backend answered its health
+endpoint, and the desktop session reopened the native window automatically.
+The desktop icon uses the same launcher.
+
+The first live survey returned eight distinct access points from the Pi. The
+direct wlan0 scan and the NetworkManager listing each returned eight rows.
+The installed older ESP32 firmware reported an unsupported command, and the
+saved survey showed partial coverage. The first 10-second BLE scan observed
+39 advertising addresses. Counts describe those acquisition windows.
+
+After a verified full 4 MiB flash backup, the CP2102-connected ESP32-D0WD-V3
+received the `nodemcu-32s` application on the confirmed `fiirbots` pin profile.
+The new image passed flash verification. A subsequent combined survey completed
+with **15 distinct BSSIDs**. The Pi driver returned 6, NetworkManager returned
+5 and the ESP32 returned 13. These lists overlap. Across the refreshed
+listings, zero BSSIDs advertised open or WEP security. A subsequent BLE scan
+received 31 advertising addresses. All eleven native result views rendered
+from the installed service on the Pi.
+
+The operator subsequently identified the wiring in `resorurce/` as the assembly
+wiring. The following observations used the default `nodemcu-32s` environment.
+Its nRF24 and RC522 pin assignments differ from the assembly. GPIO27 is
+configured as an nRF CE output there and connects to radar OT2 on the assembly.
+Use the `resources-radar` environment for this assembly. Both environments
+target the NodeMCU-32S. W5500 is on the separate ESP32-C3.
+
+The `resources-radar` image passed flash verification on the CP2102-connected
+board. After the serial connection recovered, both nRF24 diagnostics passed SPI
+checks and registered carrier detections. Telemetry showed `DUAL RX`, 81 RF bins,
+`RFID READY` and Ethernet `EXTERNAL C3`. The combined Wi-Fi survey completed
+with 18 distinct BSSIDs, including 12 seen by the ESP32.
+
+Telemetry reported CC1101 RSSI of −74 dBm in one sample and marked nRF24,
+RC522 and the main-board Ethernet peripheral as `NOT FOUND`. The two external
+nRF24 antennas contribute carrier readings when their radios respond.
+
+The Pi reported no configured monitor-mode interface. GPIO controls were
+disabled in its existing configuration. Physical finger input, GPS fixes,
+tag reads, IR loopback, radar presence and end-to-end Ethernet remain unverified.
+The Python suite passed 80 tests; those tests use fixtures for radio inputs.
+
 ## Wi-Fi visibility and protection review, 2026-11-22
 
 The handheld reference runs on an ESP32-S3 with a local screen. FIIRBots uses a

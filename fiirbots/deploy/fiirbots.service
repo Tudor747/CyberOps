@@ -11,6 +11,7 @@ SupplementaryGroups=dialout gpio
 WorkingDirectory=/opt/fiirbots
 EnvironmentFile=/etc/fiirbots.env
 Environment=PYTHONDONTWRITEBYTECODE=1
+Environment=FIIRBOTS_OBSERVATION_ONLY=1
 ExecStart=/opt/fiirbots/.venv/bin/python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 Restart=on-failure
 RestartSec=3

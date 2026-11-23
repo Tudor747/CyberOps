@@ -5,6 +5,7 @@ import platform
 import socket
 import subprocess
 import shutil
+import time
 from datetime import datetime, timezone
 import psutil
 from . import wifi_inventory, windows_wifi
@@ -60,18 +61,34 @@ def retain_wifi_cache(result, cache):
 def pi_driver_observation():
     if platform.system() != 'Linux':
         return None
+    result = {'status': 'UNAVAILABLE', 'source': 'Linux Wi-Fi driver', 'interface': 'wlan0',
+              'scan_mode': 'Active scan requested', 'access_points': []}
+    started = time.monotonic()
     try:
         proc = subprocess.run(
             ['/usr/bin/sudo', '-n', '/usr/sbin/iw', 'dev', 'wlan0', 'scan'],
             capture_output=True, timeout=15, env={**os.environ, 'LC_ALL': 'C'})
     except (OSError, subprocess.TimeoutExpired) as exc:
-        return {'status': 'UNAVAILABLE', 'message': str(exc)}
+        return {**result, 'message': str(exc)}
+    error = proc.stderr.decode('utf-8', errors='replace').strip()
     if proc.returncode:
-        return {'status': 'UNAVAILABLE', 'message': proc.stderr.decode('utf-8', errors='replace').strip()}
-    points = wifi_inventory.iw_access_points(proc.stdout.decode('utf-8', errors='replace'))
-    return {'status': 'OUTPUT', 'source': 'Linux Wi-Fi driver', 'scan_mode': 'Direct scan',
-            'access_points': points, 'observed_at': datetime.now(timezone.utc).isoformat(),
-            'message': f'{len(points)} access point observations from wlan0.'}
+        return {**result, 'message': error or f'iw exited with status {proc.returncode}.'}
+    output = proc.stdout.decode('utf-8', errors='replace')
+    elapsed_ms = (time.monotonic() - started) * 1000
+    read_at = datetime.now(timezone.utc).isoformat()
+    points = wifi_inventory.iw_access_points(output)
+    if not points and (output.strip() or error):
+        return {**result, 'message': error or 'No readable BSSID records in the driver output.'}
+    malformed = sum(line.startswith('BSS ') for line in output.splitlines()) - len(points)
+    for point in points:
+        age = point['last_seen_ms_ago']
+        if age is not None and age > elapsed_ms:
+            point.update(from_cache=True, cache_read_at=read_at)
+    message = f'{len(points)} access point observations from wlan0.'
+    if malformed:
+        message += f' {malformed} malformed driver records.'
+    return {**result, 'status': 'PARTIAL' if error or malformed else 'OUTPUT', 'access_points': points,
+            'observed_at': read_at, 'message': (message + ' ' + error).strip()}
 
 
 def wifi_observation():
@@ -93,10 +110,11 @@ def wifi_observation():
         command = ['netsh', 'wlan', 'show', 'networks', 'mode=bssid']
     elif system == 'Linux':
         source, scan_mode = 'NetworkManager', 'OS-managed rescan requested'
+        refresh_note = ' The timestamp is when the inventory was read. NetworkManager does not report a last-seen time here.'
         command = ['nmcli', '--colors', 'no', '--terse', '--escape', 'yes', '-f', wifi_inventory.NM_FIELDS,
                    'device', 'wifi', 'list', '--rescan', 'yes']
     else:
-        return {'status': 'UNAVAILABLE', 'message': 'Wi-Fi observation is supported on Windows and Linux',
+        return {'status': 'UNAVAILABLE', 'source': system, 'message': 'Wi-Fi observation is supported on Windows and Linux',
                 'access_points': []}
     result = {'status': 'UNAVAILABLE', 'source': source, 'scan_mode': scan_mode, 'access_points': [],
               'refresh': refresh}
@@ -131,6 +149,11 @@ def wifi_observation():
             return retain_wifi_cache(result, cache)
         if system == 'Windows':
             points, malformed, confirmed_empty = wifi_inventory.netsh_access_points(output)
+            # netsh names interfaces differently from WlanEnumInterfaces. In a mixed
+            # refresh we cannot attribute a completed scan to any individual row.
+            if scan_mode != 'OS-managed rescan':
+                for point in points:
+                    point.update(from_cache=True, cache_read_at=result['observed_at'])
         else:
             points, malformed = wifi_inventory.nm_access_points(output)
             confirmed_empty = False

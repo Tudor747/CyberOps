@@ -8,9 +8,44 @@ from unittest.mock import MagicMock, patch
 
 from app.desktop_tools import pi_driver_observation, wifi_observation
 from app.network_engine import discover, ScanCancelled
+from app.wifi_survey import collect
 
 
 class LinuxWifiTests(unittest.TestCase):
+    def test_linux_survey_keeps_both_backends_and_cached_evidence(self):
+        first = {'bssid': '02:00:00:00:00:01', 'interface': 'wlan0', 'ssid': 'Lab', 'security': 'WPA2'}
+        second = {**first, 'bssid': '02:00:00:00:00:02', 'interface': 'wlan1', 'security': 'Open'}
+        prior = {**first, 'ssid': 'Old name', 'security': 'WEP', 'from_cache': True}
+        driver = dict(source='Linux Wi-Fi driver', status='OUTPUT', observed_at='2026-11-01T00:00:00Z',
+                      access_points=[first])
+        manager = dict(source='NetworkManager', status='OUTPUT', observed_at='2026-11-01T00:00:02Z',
+                       access_points=[second, prior])
+        with patch('app.desktop_tools.pi_driver_observation', return_value=driver), \
+             patch('app.desktop_tools.wifi_observation', return_value=manager):
+            survey = collect(None, ['Host'], 1, threading.Event(), lambda *_: None)
+        self.assertEqual(survey['status'], 'COMPLETE')
+        self.assertEqual([s['source'] for s in survey['sources']], ['Linux Wi-Fi driver', 'NetworkManager'])
+        self.assertEqual(survey['summary'], dict(named_ssids=1, shared_ssids=1, open_bssids=1, wep_bssids=0))
+        self.assertEqual(len(survey['access_points']), 2)
+        self.assertIsNone(survey['access_points'][0]['samples'][1]['observed_at'])
+
+    def test_survey_retains_successful_empty_driver_scan_when_nmcli_fails(self):
+        driver = dict(source='Linux Wi-Fi driver', status='OUTPUT', access_points=[])
+        error = dict(source='NetworkManager', status='UNAVAILABLE', access_points=[])
+        with patch('app.desktop_tools.pi_driver_observation', return_value=driver), \
+             patch('app.desktop_tools.wifi_observation', return_value=error):
+            result = collect(None, ['Host'], 1, threading.Event(), lambda *_: None)
+        self.assertEqual(result['status'], 'PARTIAL')
+        self.assertEqual([s['observed_rows'] for s in result['sources']], [0, None])
+
+    def test_unreadable_driver_output_is_not_a_successful_empty_scan(self):
+        with patch('app.desktop_tools.platform.system', return_value='Linux'), \
+             patch('app.desktop_tools.subprocess.run', return_value=SimpleNamespace(
+                 returncode=0, stdout=b'BSS malformed\n', stderr=b'')):
+            result = pi_driver_observation()
+        self.assertEqual(result['status'], 'UNAVAILABLE')
+        self.assertEqual(result['interface'], 'wlan0')
+
     def test_driver_retains_hidden_and_five_ghz_access_points(self):
         output = (b'BSS 02:00:00:00:00:01(on wlan0) -- associated\n'
                   b'\tfreq: 2437.0\n\tsignal: -42.00 dBm\n\tSSID: Lab\n\tRSN:\t * Version: 1\n'
@@ -26,6 +61,21 @@ class LinuxWifiTests(unittest.TestCase):
         self.assertEqual(second['channel'], 36)
         self.assertIsNone(second['ssid'])
         self.assertEqual(run.call_args.args[0], ['/usr/bin/sudo', '-n', '/usr/sbin/iw', 'dev', 'wlan0', 'scan'])
+
+    def test_driver_decodes_escaped_ssid_and_identifies_older_cached_reading(self):
+        output = (b'BSS 02:00:00:00:00:01(on wlan0)\n\tSSID: Caf\\xc3\\xa9\n'
+                  b'\tlast seen: 12000 ms ago\n\tsignal: 23/100\n')
+        with patch('app.desktop_tools.platform.system', return_value='Linux'), \
+             patch('app.desktop_tools.time.monotonic', side_effect=[50, 53]), \
+             patch('app.desktop_tools.subprocess.run', return_value=SimpleNamespace(
+                 returncode=0, stdout=output, stderr=b'')):
+            point, = pi_driver_observation()['access_points']
+        self.assertEqual(point['ssid'], 'Caf\u00e9')
+        self.assertEqual(point['ssid_hex'], '436166c3a9')
+        self.assertTrue(point['from_cache'])
+        self.assertEqual(point['last_seen_ms_ago'], 12000)
+        self.assertEqual(point['signal_percent'], 23)
+        self.assertIsNone(point['rssi_dbm'])
 
     def observe(self, **kwargs):
         with patch('app.desktop_tools.platform.system', return_value='Linux'), \

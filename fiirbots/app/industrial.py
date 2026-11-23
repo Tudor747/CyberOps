@@ -10,6 +10,7 @@ from pydantic import Field
 
 from .models import StrictModel
 from .network_engine import require_target
+from .observation_tools import latest
 
 
 class Asset(StrictModel):
@@ -74,8 +75,11 @@ def industrial_routes(controller, operation):
     routes = APIRouter()
 
     @routes.get('/api/industrial/assessment')
-    def current():
-        return assessment(controller.db, controller.settings.network)
+    def current(include_wifi: bool = False):
+        result = assessment(controller.db, controller.settings.network)
+        if include_wifi:
+            result['wifi_survey'] = latest(controller.db, 'WIFI_SURVEY') or {'status': 'NOT_TESTED'}
+        return result
 
     @routes.put('/api/industrial/assets')
     def save(asset: Asset):

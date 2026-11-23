@@ -40,8 +40,11 @@ def rf_history(db):
             samples.append({'id': row['id'], 'recorded_at': row['timestamp'], 'bins': payload['bins'],
                             'rf_dwell_us': payload.get('rf_dwell_us')})
     baseline = latest(db, 'RF_BASELINE')
-    comparable = samples and baseline and baseline.get('rf_dwell_us') == samples[-1]['rf_dwell_us']
+    dwell = samples[-1]['rf_dwell_us'] if samples else None
+    baseline_dwell = (baseline or {}).get('rf_dwell_us')
+    comparable = (type(dwell) is int and dwell > 0 and type(baseline_dwell) is int
+                  and baseline_dwell == dwell and valid_bins(baseline.get('bins')))
     delta = [v - b for v, b in zip(samples[-1]['bins'], baseline['bins'])] if comparable else None
-    return {'samples': samples, 'baseline': baseline, 'delta': delta,
+    return {'samples': samples, 'incomplete_sweeps': len(rows) - len(samples), 'baseline': baseline, 'delta': delta,
             'frequency_start_mhz': 2400, 'frequency_step_mhz': 1,
             'message': 'Historical carrier occupancy (0–8 detections), not dBm or decoded Wi-Fi. Timestamps identify old samples; missing intervals are not zero readings.'}

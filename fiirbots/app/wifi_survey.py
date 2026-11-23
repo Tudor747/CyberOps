@@ -7,6 +7,7 @@ from uuid import uuid4
 
 from . import desktop_tools
 from .network_engine import ScanCancelled
+from .wifi_inventory import MAC
 
 
 def timestamp():
@@ -17,11 +18,13 @@ def esp_observation(link, cancel):
     scan_id = uuid4().hex
     source = {'source': 'ESP32', 'scan_mode': 'Passive, 2.4 GHz'}
     rows = []
+    requested = False
     try:
         if not link.snapshot().get('connected'):
             raise ValueError('ESP32 disconnected. Check the configured serial port and USB connection.')
         if cancel.is_set():
             raise ScanCancelled()
+        requested = True
         started = link.request('WIFI_SCAN_START', scan_id=scan_id)
         if started.get('scan_id') != scan_id or started.get('status') != 'WIFI_SCAN':
             raise ValueError('ESP32 did not start the requested Wi-Fi scan')
@@ -40,12 +43,12 @@ def esp_observation(link, cancel):
                 continue
             total, networks = page.get('total'), page.get('networks')
             if (page.get('state') != 'complete' or type(total) is not int or not 0 <= total <= 65535
-                    or expected not in (None, total) or page.get('offset') != len(rows)
+                    or expected not in (None, total) or type(page.get('offset')) is not int or page['offset'] != len(rows)
                     or not isinstance(networks, list) or len(networks) > 12):
                 raise ValueError('Invalid ESP32 scan page')
             expected = total
             for row in networks:
-                if (not isinstance(row, dict) or not re.fullmatch(r'(?:[\da-fA-F]{2}:){5}[\da-fA-F]{2}', str(row.get('bssid')))
+                if (not isinstance(row, dict) or not MAC.fullmatch(str(row.get('bssid')))
                         or not isinstance(row.get('ssid'), str) or type(row.get('channel')) is not int
                         or not 1 <= row['channel'] <= 14 or type(row.get('rssi_dbm')) is not int
                         or not -127 <= row['rssi_dbm'] <= 0 or not isinstance(row.get('security'), str)):
@@ -57,7 +60,8 @@ def esp_observation(link, cancel):
             rows.extend(networks)
             if len(rows) == total and 'next_offset' in page and page['next_offset'] is None:
                 break
-            if not networks or len(rows) >= total or page.get('next_offset') != len(rows):
+            if (not networks or len(rows) >= total or type(page.get('next_offset')) is not int
+                    or page['next_offset'] != len(rows)):
                 raise ValueError('Incomplete ESP32 scan pagination')
         return {**source, 'status': 'OUTPUT', 'access_points': rows, 'observed_at': timestamp(),
                 'message': 'Scan completed on the integrated Wi-Fi radio.'}
@@ -65,7 +69,7 @@ def esp_observation(link, cancel):
         return {**source, 'status': 'UNAVAILABLE', 'access_points': [], 'message': str(exc)}
     finally:
         # The firmware also expires abandoned records after heartbeat loss or inactivity.
-        if link.snapshot().get('connected'):
+        if requested and link.snapshot().get('connected'):
             try:
                 link.request('WIFI_SCAN_CANCEL', scan_id=scan_id)
             except (OSError, ValueError):
@@ -83,9 +87,11 @@ def summarize(observations):
     open_count = wep_count = 0
     for bssid, samples in sorted(by_bssid.items()):
         observed_names = sorted({s['ssid'] for s in samples if s.get('ssid')})
-        for name in observed_names:
-            names[name].add(bssid)
-        security = {str(s.get('security')).upper() for s in samples}
+        fresh = [sample for sample in samples if not sample.get('from_cache')]
+        for sample in fresh:
+            if sample.get('ssid'):
+                names[sample['ssid']].add(bssid)
+        security = {str(s.get('security')).upper() for s in fresh}
         open_count += 'OPEN' in security
         wep_count += any('WEP' in label.split() or label.startswith('WEP-') for label in security)
         points.append({'bssid': bssid, 'ssids': observed_names, 'samples': samples})
@@ -102,12 +108,13 @@ def collect(link, receivers, passes, cancel, progress):
             progress(index, receiver)
             if receiver == 'Host':
                 driver = desktop_tools.pi_driver_observation()
-                if driver and driver['status'] == 'OUTPUT' and driver['access_points']:
-                    result = driver
-                else:
-                    result = desktop_tools.wifi_observation()
-                    if driver and driver['status'] == 'UNAVAILABLE':
-                        result['message'] += ' Direct wlan0 scan unavailable: ' + driver['message']
+                if driver is not None:
+                    observations.append({**driver, 'pass': index, 'receiver': receiver})
+                if cancel.is_set():
+                    raise ScanCancelled()
+                # NetworkManager lists every managed Wi-Fi adapter. The direct
+                # wlan0 scan above contributes a separate driver-level reading.
+                result = desktop_tools.wifi_observation()
             else:
                 result = esp_observation(link, cancel)
             observations.append({**result, 'pass': index, 'receiver': receiver})
