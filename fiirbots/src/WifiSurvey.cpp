@@ -25,6 +25,52 @@ esp_err_t scanError = ESP_OK;
 wifi_ap_record_t* records = nullptr;
 uint16_t count = 0;
 
+enum FrameKind { Management, Data, Control, Other, Beacon, Deauthentication,
+                 Disassociation, ProbeRequest, ProbeResponse, FrameKindCount };
+constexpr const char* frameNames[] = {"management", "data", "control", "other", "beacon",
+                                      "deauthentication", "disassociation", "probe_request", "probe_response"};
+static_assert(sizeof(frameNames) / sizeof(frameNames[0]) == FrameKindCount, "Counter names must match frame kinds");
+enum class MonitorState { Idle, Running, Complete, Cancelled, Error };
+MonitorState monitorState = MonitorState::Idle;
+char monitorId[33] = {};
+uint8_t monitorChannel = 0;
+unsigned long monitorStartedAt = 0, monitorDuration = 0, monitorElapsed = 0, monitorLastRequestAt = 0;
+esp_err_t monitorError = ESP_OK;
+portMUX_TYPE frameLock = portMUX_INITIALIZER_UNLOCKED;
+bool acceptingFrames = false;
+uint32_t frameCounts[FrameKindCount] = {};
+
+void receiveFrame(void* buffer, wifi_promiscuous_pkt_type_t type) {
+    if (!buffer) return;
+    const auto* rx = static_cast<const wifi_pkt_rx_ctrl_t*>(buffer);
+    if (rx->rx_state != 0) return;
+    FrameKind kind = Other, subtype = FrameKindCount;
+    switch (type) {
+    case WIFI_PKT_MGMT:
+        kind = Management;
+        if (rx->sig_len >= 28) {
+            const auto* frame = static_cast<const wifi_promiscuous_pkt_t*>(buffer);
+            switch (frame->payload[0] & 0xf0) {
+            case 0x40: subtype = ProbeRequest; break;
+            case 0x50: subtype = ProbeResponse; break;
+            case 0x80: subtype = Beacon; break;
+            case 0xa0: subtype = Disassociation; break;
+            case 0xc0: subtype = Deauthentication; break;
+            }
+        }
+        break;
+    case WIFI_PKT_DATA: kind = Data; break;
+    case WIFI_PKT_CTRL: kind = Control; break;
+    default: break;
+    }
+    portENTER_CRITICAL(&frameLock);
+    if (acceptingFrames) {
+        ++frameCounts[kind];
+        if (subtype != FrameKindCount) ++frameCounts[subtype];
+    }
+    portEXIT_CRITICAL(&frameLock);
+}
+
 void scanWorker(void*) {
     wifi_scan_config_t config = {};
     config.show_hidden = true;
@@ -46,7 +92,7 @@ void stopDriver() {
     }
 }
 
-esp_err_t startScan() {
+esp_err_t startDriver(wifi_mode_t mode) {
     static bool networkInitialized = false;
     if (!networkInitialized) {
         esp_err_t err = esp_netif_init();
@@ -60,13 +106,56 @@ esp_err_t startScan() {
     if (err != ESP_OK) return err;
     driverInitialized = true;
     err = esp_wifi_set_storage(WIFI_STORAGE_RAM);
-    if (err == ESP_OK) err = esp_wifi_set_mode(WIFI_MODE_STA);
+    if (err == ESP_OK) err = esp_wifi_set_mode(mode);
     if (err == ESP_OK) err = esp_wifi_start();
     if (err != ESP_OK) return err;
     driverStarted = true;
+    return ESP_OK;
+}
+
+esp_err_t startScan() {
+    esp_err_t err = startDriver(WIFI_MODE_STA);
+    if (err != ESP_OK) return err;
     workerResult.store(workerPending);
     workerActive = xTaskCreate(scanWorker, "wifi-survey", 4096, nullptr, 1, nullptr) == pdPASS;
     return workerActive ? ESP_OK : ESP_ERR_NO_MEM;
+}
+
+esp_err_t startMonitor() {
+    // NULL does not associate as a station or advertise as an access point.
+    esp_err_t err = startDriver(WIFI_MODE_NULL);
+    wifi_country_t country = {};
+    if (err == ESP_OK) err = esp_wifi_get_country(&country);
+    if (err == ESP_OK && (monitorChannel < country.schan || monitorChannel >= country.schan + country.nchan))
+        return ESP_ERR_INVALID_ARG;
+    if (err == ESP_OK) err = esp_wifi_set_channel(monitorChannel, WIFI_SECOND_CHAN_NONE);
+    const wifi_promiscuous_filter_t filter = {WIFI_PROMIS_FILTER_MASK_MGMT | WIFI_PROMIS_FILTER_MASK_DATA |
+                                             WIFI_PROMIS_FILTER_MASK_CTRL | WIFI_PROMIS_FILTER_MASK_MISC};
+    const wifi_promiscuous_filter_t controlFilter = {WIFI_PROMIS_CTRL_FILTER_MASK_ALL};
+    if (err == ESP_OK) err = esp_wifi_set_promiscuous_filter(&filter);
+    if (err == ESP_OK) err = esp_wifi_set_promiscuous_ctrl_filter(&controlFilter);
+    if (err == ESP_OK) err = esp_wifi_set_promiscuous_rx_cb(receiveFrame);
+    if (err != ESP_OK) return err;
+
+    monitorStartedAt = millis();
+    portENTER_CRITICAL(&frameLock);
+    memset(frameCounts, 0, sizeof(frameCounts));
+    acceptingFrames = true;
+    portEXIT_CRITICAL(&frameLock);
+    return esp_wifi_set_promiscuous(true);
+}
+
+void finishMonitor(MonitorState state) {
+    portENTER_CRITICAL(&frameLock);
+    acceptingFrames = false;
+    portEXIT_CRITICAL(&frameLock);
+    monitorElapsed = millis() - monitorStartedAt;
+    monitorState = state;
+    if (driverStarted) {
+        esp_wifi_set_promiscuous(false);
+        esp_wifi_set_promiscuous_rx_cb(nullptr);
+    }
+    stopDriver();
 }
 
 esp_err_t collectResults() {
@@ -122,19 +211,96 @@ void errorResponse(JsonDocument& response, const char* message) {
     response["status"] = "ERROR";
     response["message"] = message;
 }
-}
 
-void wifiSurveyStop() {
+void clearSurvey() {
     if (scanId[0]) strlcpy(cancelledId, scanId, sizeof(cancelledId));
     scanId[0] = 0;
     free(records);
     records = nullptr;
     count = 0;
-    stopDriver();
+    if (monitorState != MonitorState::Running) stopDriver();
+}
+
+bool validWifiId(const char* id) {
+    const size_t length = strlen(id);
+    return length >= 12 && length <= 32 &&
+           strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") == length;
+}
+
+void monitorCommand(const JsonDocument& command, JsonDocument& response, bool hardwareActive) {
+    const char* id = command["scan_id"] | "";
+    const char* cmd = command["cmd"] | "";
+    const bool start = strcmp(cmd, "WIFI_MONITOR_START") == 0;
+    const bool cancel = strcmp(cmd, "WIFI_MONITOR_CANCEL") == 0;
+    if (!validWifiId(id)) {
+        errorResponse(response, "Invalid Wi-Fi monitor identity");
+        return;
+    }
+    const bool match = strcmp(id, monitorId) == 0;
+    if (!match && !start) {
+        errorResponse(response, "Wi-Fi monitor session expired or changed");
+        return;
+    }
+    if (start && !hardwareActive) {
+        errorResponse(response, "Hardware monitoring must be active for Wi-Fi packet monitoring");
+        return;
+    }
+    response["status"] = "WIFI_MONITOR";
+    response["scan_id"] = id;
+    if (!match) {
+        if (workerActive || monitorState == MonitorState::Running) {
+            response["monitor_state"] = "BUSY";
+            response["message"] = "The ESP32 Wi-Fi radio is already in use";
+            return;
+        }
+        const auto channel = command["channel"];
+        const auto seconds = command["duration_s"];
+        if (!channel.is<uint8_t>() || channel.as<uint8_t>() < 1 || channel.as<uint8_t>() > 13 ||
+            !seconds.is<uint8_t>() || seconds.as<uint8_t>() < 1 || seconds.as<uint8_t>() > 30) {
+            errorResponse(response, "Wi-Fi packet monitoring requires channel 1-13 and duration 1-30 seconds");
+            return;
+        }
+        strlcpy(monitorId, id, sizeof(monitorId));
+        monitorChannel = channel.as<uint8_t>();
+        monitorDuration = seconds.as<uint8_t>() * 1000UL;
+        monitorElapsed = 0;
+        monitorError = startMonitor();
+        if (monitorError == ESP_OK) monitorState = MonitorState::Running;
+        else finishMonitor(MonitorState::Error);
+    }
+    monitorLastRequestAt = millis();
+    if (cancel && monitorState == MonitorState::Running) finishMonitor(MonitorState::Cancelled);
+    if (monitorState == MonitorState::Error) {
+        response["monitor_state"] = "ERROR";
+        response["message"] = String("Wi-Fi packet monitoring failed: ") + esp_err_to_name(monitorError);
+        return;
+    }
+    const bool running = monitorState == MonitorState::Running;
+    response["monitor_state"] = running ? "RUNNING" : monitorState == MonitorState::Complete ? "COMPLETE" : "CANCELLED";
+    response["channel"] = monitorChannel;
+    response["elapsed_ms"] = running ? millis() - monitorStartedAt : monitorElapsed;
+    uint32_t snapshot[FrameKindCount];
+    portENTER_CRITICAL(&frameLock);
+    memcpy(snapshot, frameCounts, sizeof(snapshot));
+    portEXIT_CRITICAL(&frameLock);
+    JsonObject counters = response["counts"].to<JsonObject>();
+    for (size_t index = 0; index < FrameKindCount; ++index) counters[frameNames[index]] = snapshot[index];
+}
+}
+
+void wifiSurveyStop() {
+    if (monitorState == MonitorState::Running) finishMonitor(MonitorState::Cancelled);
+    clearSurvey();
 }
 
 void wifiSurveyTick() {
     const unsigned long now = millis();
+    if (monitorState == MonitorState::Running && now - monitorStartedAt >= monitorDuration)
+        finishMonitor(MonitorState::Complete);
+    if (monitorId[0] && monitorState != MonitorState::Running && now - monitorLastRequestAt > resultIdleMs) {
+        monitorId[0] = 0;
+        monitorState = MonitorState::Idle;
+    }
     if (workerActive) {
         int result = workerResult.load();
         if (result == workerPending) {
@@ -151,20 +317,23 @@ void wifiSurveyTick() {
         }
         stopDriver();
     }
-    if (scanId[0] && now - lastRequestAt > resultIdleMs) wifiSurveyStop();
+    if (scanId[0] && now - lastRequestAt > resultIdleMs) clearSurvey();
 }
 
 void wifiSurveyCommand(const JsonDocument& command, JsonDocument& response, bool monitorActive) {
     const char* id = command["scan_id"] | "";
     const char* cmd = command["cmd"] | "";
-    if (strlen(id) < 12 || strlen(id) > 32 ||
-        strspn(id, "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789-_") != strlen(id)) {
+    if (!strncmp(cmd, "WIFI_MONITOR_", 13)) {
+        monitorCommand(command, response, monitorActive);
+        return;
+    }
+    if (!validWifiId(id)) {
         errorResponse(response, "Invalid Wi-Fi scan identity");
         return;
     }
     const bool match = strcmp(id, scanId) == 0;
     if (!strcmp(cmd, "WIFI_SCAN_CANCEL")) {
-        if (match) wifiSurveyStop();
+        if (match) clearSurvey();
         else if (strcmp(id, cancelledId) != 0) {
             errorResponse(response, "Wi-Fi scan identity mismatch");
             return;
@@ -178,11 +347,11 @@ void wifiSurveyCommand(const JsonDocument& command, JsonDocument& response, bool
     }
     bool start = !strcmp(cmd, "WIFI_SCAN_START");
     if (!match) {
-        if (!start || workerActive) {
+        if (!start || workerActive || monitorState == MonitorState::Running) {
             errorResponse(response, start ? "Wi-Fi scan already running" : "Wi-Fi scan expired or changed");
             return;
         }
-        wifiSurveyStop();
+        clearSurvey();
         strlcpy(scanId, id, sizeof(scanId));
         startedAt = millis();
         scanError = startScan();

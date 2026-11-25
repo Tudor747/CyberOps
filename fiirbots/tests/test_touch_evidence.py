@@ -2,9 +2,29 @@
 import unittest
 
 from app.touch_evidence import hardware_lines, tool_lines, wifi_lines
+from app.wifi_survey import fresh_inventory, inventory_alerts
 
 
 class TouchEvidenceTests(unittest.TestCase):
+    def test_ap_alerts_require_fresh_observations_and_compare_security_by_receiver(self):
+        known_ap = '02:00:00:00:00:01'
+        new_ap = '02:00:00:00:00:02'
+        cached_ap = '02:00:00:00:00:03'
+        sample = {'ssid': 'Office', 'source': 'ESP32', 'security': 'WPA2'}
+        known = fresh_inventory({'access_points': [{'bssid': known_ap, 'samples': [sample]}]})
+        survey = {'status': 'PARTIAL', 'access_points': [
+            {'bssid': known_ap, 'samples': [{**sample, 'security': 'OPEN'},
+                                            {**sample, 'source': 'NetworkManager', 'security': 'WPA3'}]},
+            {'bssid': new_ap, 'samples': [sample]},
+            {'bssid': cached_ap, 'samples': [{**sample, 'from_cache': True}]},
+        ]}
+        alerts = inventory_alerts(fresh_inventory(survey), known)
+        self.assertEqual([(alert['kind'], alert['bssid']) for alert in alerts],
+                         [('SECURITY_CHANGED', known_ap), ('NEW_BSSID', new_ap)])
+        display = '\n'.join(wifi_lines({**survey, 'alerts': alerts}))
+        self.assertIn('WPA2 → OPEN', display)
+        self.assertIn(f'New BSSID for Office · {new_ap}', display)
+
     def test_survey_preserves_cached_and_receiver_specific_evidence(self):
         sample = {'security': 'WEP', 'signal_percent': 0, 'source': 'NetworkManager',
                   'pass': 1, 'from_cache': True}

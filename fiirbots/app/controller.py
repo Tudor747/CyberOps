@@ -132,12 +132,14 @@ class Controller:
         self.launch('Network scan', work)
         return batch
 
-    def start_analysis(self):
+    def start_analysis(self, scan_id=None):
         if not self.settings.api_key:
             raise ValueError('AI is not configured: set GEMINI_API_KEY on the Pi')
         batch = self.db.latest_scan()
         if not batch or batch['status'] != 'COMPLETE':
             raise ValueError('Complete a network scan first')
+        if scan_id is not None and (batch['id'] != scan_id or batch['network'] != self.settings.network):
+            raise ValueError('Run a fresh LAN scan for the selected segment before analyzing')
         def work(cancel):
             if cancel.is_set():
                 raise network_engine.ScanCancelled()

@@ -45,7 +45,8 @@ def assessment(db, network):
                      'baseline_status': evidence['status'] if evidence else None,
                      'finding': finding, 'priority': 'High review' if ports and profile and
                      profile['criticality'] == 'High' else 'Review' if ports else 'Information'})
-    return {'network': network, 'scan_at': scan['finished_at'] if scan else None, 'assets': rows}
+    return {'network': network, 'scan_at': scan['finished_at'] if scan else None,
+            'scan_id': scan['id'] if scan else None, 'assets': rows}
 
 
 def report_html(result):
@@ -75,10 +76,12 @@ def industrial_routes(controller, operation):
     routes = APIRouter()
 
     @routes.get('/api/industrial/assessment')
-    def current(include_wifi: bool = False):
+    def current(include_wifi: bool = False, include_ai: bool = False):
         result = assessment(controller.db, controller.settings.network)
         if include_wifi:
             result['wifi_survey'] = latest(controller.db, 'WIFI_SURVEY') or {'status': 'NOT_TESTED'}
+        if include_ai:
+            result['ai_report'] = controller.db.latest_report(result['scan_id']) if result['scan_id'] else None
         return result
 
     @routes.put('/api/industrial/assets')

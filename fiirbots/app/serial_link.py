@@ -16,6 +16,12 @@ def decode_response(line, request_id):
         if not isinstance(data.get('scan_id'), str) or data.get('state') not in ('scanning', 'complete'):
             raise ValueError('Invalid Wi-Fi scan response')
         return data
+    if data.get('status') == 'WIFI_MONITOR':
+        if not isinstance(data.get('scan_id'), str) or data.get('monitor_state') not in (
+            'RUNNING', 'COMPLETE', 'CANCELLED', 'BUSY', 'ERROR'
+        ):
+            raise ValueError('Invalid Wi-Fi monitor response')
+        return data
     if data.get('status') == 'DIAGNOSTIC':
         result = data.get('test')
         if not isinstance(result, dict) or result.get('state') not in ('RUNNING','PASS','FAIL','NO_SIGNAL','PARTIAL','CANCELLED'):
@@ -72,7 +78,8 @@ class SerialLink:
                 raise OSError('ESP32 disconnected')
             if command == 'POLL_HARDWARE' and self.testing.is_set():
                 return {'status': 'STOPPED'}
-            if command in ('POLL_HARDWARE', 'TEST_START', 'WIFI_SCAN_START', 'WIFI_SCAN_PAGE') and self.interlocked():
+            if command in ('POLL_HARDWARE', 'TEST_START', 'WIFI_SCAN_START', 'WIFI_SCAN_PAGE',
+                           'WIFI_MONITOR_START', 'WIFI_MONITOR_STATUS') and self.interlocked():
                 command = 'STOP'
             request_id = uuid4().hex[:12]
             self.connection.write((json.dumps({**params, 'cmd': command, 'request_id': request_id}) + '\n').encode())
@@ -100,6 +107,10 @@ class SerialLink:
                 if response['status'] == 'ERROR':
                     raise ValueError(str(response.get('message', 'ESP32 rejected command'))[:200])
                 if response['status'] == 'WIFI_SCAN' and command not in ('WIFI_SCAN_START', 'WIFI_SCAN_PAGE'):
+                    raise ValueError('Unexpected serial response for command')
+                if response['status'] == 'WIFI_MONITOR' and command not in (
+                    'WIFI_MONITOR_START', 'WIFI_MONITOR_STATUS', 'WIFI_MONITOR_CANCEL'
+                ):
                     raise ValueError('Unexpected serial response for command')
                 return response
             raise TimeoutError('ESP32 response timed out')

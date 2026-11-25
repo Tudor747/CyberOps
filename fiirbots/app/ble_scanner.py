@@ -20,7 +20,8 @@ async def observe(cancel, duration=10, scanner_factory=None):
         if cancel.is_set() or (device.address not in rows and len(rows) >= 512):
             return
         rows[device.address] = {
-            'address': device.address, 'name': advertisement.local_name or device.name,
+            'address': device.address,
+            'name': advertisement.local_name or rows.get(device.address, {}).get('name') or device.name,
             'rssi_dbm': advertisement.rssi,
             'service_uuids': list(advertisement.service_uuids),
             'observed_at': datetime.now(timezone.utc).isoformat()}

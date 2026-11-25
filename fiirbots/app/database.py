@@ -106,8 +106,13 @@ class Database:
             r['payload_data'] = json.loads(r['payload_data'])
         return rows
 
-    def latest_report(self):
-        rows = self.rows('SELECT * FROM ai_analysis_reports ORDER BY id DESC LIMIT 1')
+    def latest_report(self, scan_id=None):
+        query = 'SELECT * FROM ai_analysis_reports'
+        params = ()
+        if scan_id is not None:
+            query += ' WHERE scan_batch_id=?'
+            params = (scan_id,)
+        rows = self.rows(query + ' ORDER BY id DESC LIMIT 1', params)
         if not rows:
             return None
         rows[0]['report'] = json.loads(rows[0].pop('report_json'))

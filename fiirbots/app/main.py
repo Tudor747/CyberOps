@@ -112,8 +112,8 @@ def create_app(settings=None):
         return {'status': 'STOP_REQUESTED'}
 
     @app.post('/api/analyze', status_code=202)
-    def analyze():
-        operation(controller.start_analysis)
+    def analyze(scan_id: str | None = None):
+        operation(lambda: controller.start_analysis(scan_id))
         return {'status': 'STARTED'}
 
     @app.post('/api/ai/check')

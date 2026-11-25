@@ -11,6 +11,27 @@ def _text(value, missing='Unknown'):
     return ''.join(c if c.isprintable() else ascii(c)[1:-1] for c in str(value))
 
 
+def ai_report_lines(result):
+    if not result.get('scan_id'):
+        return ['Gemini analysis\nGo to Assets and complete a LAN scan first.']
+    record = result.get('ai_report')
+    if not record:
+        return ['Gemini analysis\nSelect Analyze with Gemini to review this LAN scan.']
+    report = record['report']
+    findings = report['findings']
+    order = ('CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO')
+    lines = [f"Gemini estimate · {report['overall_threat_score']}/100 · {len(findings)} findings\n"
+             f"Generated UTC · {_text(record.get('created_at'))}\n{_text(report['summary'])}"]
+    for finding in sorted(findings, key=lambda item: order.index(item['risk_level'])):
+        confidence = 'Review finding' if finding['is_justified'] else 'Evidence incomplete'
+        lines.append(f"{finding['risk_level']} · {_text(finding['target_ip'])} · {confidence}\n"
+                     f"{_text(finding['description'])}\n"
+                     f"Next check · {_text(finding['recommended_remediation'])}")
+    if not findings:
+        lines.append('Gemini returned no findings for this scan.')
+    return lines
+
+
 def _measurement(value, unit):
     return f'{value} {unit}' if type(value) in (int, float) else 'Unknown'
 
@@ -69,6 +90,18 @@ def wifi_lines(result):
     lines = [f"Wi-Fi survey · {_text(status)}"]
     if result.get('finished_at'):
         lines.append('Finished · ' + _text(result['finished_at']))
+    if 'known_bssids' in result:
+        lines.append(f"Known access points · {len(result['known_bssids'])}")
+    for alert in result.get('alerts', []):
+        bssid = _text(alert['bssid'])
+        if alert['kind'] == 'NEW_BSSID':
+            names = ', '.join(_text(name) for name in alert['ssids'])
+            lines.append(f'New BSSID for {names} · {bssid}')
+        elif alert['kind'] == 'SECURITY_CHANGED':
+            previous = ', '.join(_text(label) for label in alert['previous'])
+            observed = ', '.join(_text(label) for label in alert['observed'])
+            lines.append(f"Advertised security changed · {bssid} · {_text(alert['source'])}\n"
+                         f'{previous} → {observed}')
     sources = result.get('sources', [])
     cached_passes = {(s.get('source'), s.get('pass')) for s in sources
                      if s.get('scan_mode') in ('OS cache', 'Mixed refreshed and cached adapters')}
@@ -189,6 +222,9 @@ def _wireless_lines(result):
              f" · {_measurement(result.get('duration_s'), 's')} listened",
              'Capture finished · ' + _text(result.get('finished_at'))]
     counts = result.get('counts', {})
+    duration = result.get('duration_s') or 0
+    if 'beacon' in counts and duration > 0:
+        lines.append(f"Beacon rate · {counts['beacon'] / duration:.1f}/s")
     lines.append('Frames · ' + ', '.join(f"{kind.replace('_', ' ')} {n}" for kind, n in sorted(counts.items()))
                  if counts else 'No 802.11 frames observed in this window.')
     if result.get('truncated'):
@@ -201,6 +237,19 @@ def _wireless_lines(result):
     for probe in result.get('probes', []):
         lines.append(f"Probe request · {_text(probe.get('ssid'), 'Unspecified network')}\n"
                      f"{_text(probe.get('source'))} · {_signal(probe)}")
+    return lines
+
+
+def _wifi_exercise_lines(scenario):
+    lines = ['Simulated exercise · no radio traffic']
+    if scenario == 'beacon':
+        lines.extend(['Beacon spike · channel 6', 'Reference · 12 beacon frames/s\nExercise · 120 beacon frames/s',
+                      'Next check · Compare the BSSIDs with your known access points. A high rate alone does not identify the cause.'])
+    elif scenario == 'disconnect':
+        lines.extend(['Disconnect spike · channel 6', 'Reference · 0 disconnect frames in 10 s\nExercise · 30 disconnect frames in 10 s',
+                      'Next check · Compare the timestamps with client disconnects and router logs.'])
+    else:
+        lines.append('Choose a scenario to practice interpreting Wi-Fi results.')
     return lines
 
 
@@ -243,6 +292,8 @@ def tool_lines(path, result):
     """Format the response from a named read-only API endpoint."""
     if path == 'diagnostics/history':
         return _diagnostic_lines(result)
+    if path == 'lab/wifi-exercise':
+        return _wifi_exercise_lines(result.get('scenario'))
     if result.get('status') in ('NOT_TESTED', 'UNAVAILABLE', 'ERROR', 'CANCELLED'):
         return [_text(result.get('message'), 'No saved observation.' if result['status'] == 'NOT_TESTED'
                       else result['status'].title())]
@@ -250,7 +301,7 @@ def tool_lines(path, result):
         return _ble_lines(result)
     if path == 'rf/history':
         return _rf_lines(result)
-    if path == 'wireless/latest':
+    if path in ('wireless/latest', 'wireless/esp-monitor/latest'):
         return _wireless_lines(result)
     if path == 'wireless/interfaces':
         return [f"{_text(r.get('name'))} · {_text(r.get('mode'))} · channel {_text(r.get('channel'))}"

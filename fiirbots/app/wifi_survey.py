@@ -99,6 +99,44 @@ def summarize(observations):
                     'open_bssids': open_count, 'wep_bssids': wep_count}
 
 
+def fresh_inventory(survey):
+    inventory = {}
+    cached = {(row.get('source'), row.get('pass')) for row in survey.get('sources', [])
+              if row.get('scan_mode') in ('OS cache', 'Mixed refreshed and cached adapters')}
+    for point in survey.get('access_points', []):
+        samples = [row for row in point['samples'] if not row.get(
+            'from_cache', (row.get('source'), row.get('pass')) in cached)]
+        if not samples:
+            continue
+        security = defaultdict(set)
+        for row in samples:
+            label = (row.get('security') or '').strip().upper()
+            if label and label not in ('UNKNOWN', '--', 'UNAVAILABLE'):
+                security[row['source']].add(label)
+        inventory[point['bssid']] = {
+            'ssids': sorted({row['ssid'] for row in samples if row.get('ssid')}),
+            'security': {source: sorted(labels) for source, labels in security.items()},
+        }
+    return inventory
+
+
+def inventory_alerts(observed, known):
+    watched_names = {name for ap in known.values() for name in ap['ssids']}
+    alerts = []
+    for bssid, ap in observed.items():
+        if bssid not in known:
+            overlap = sorted(watched_names.intersection(ap['ssids']))
+            if overlap:
+                alerts.append({'kind': 'NEW_BSSID', 'bssid': bssid, 'ssids': overlap})
+            continue
+        expected = known[bssid]['security']
+        for source, labels in ap['security'].items():
+            if source in expected and set(labels).difference(expected[source]):
+                alerts.append({'kind': 'SECURITY_CHANGED', 'bssid': bssid, 'source': source,
+                               'previous': expected[source], 'observed': labels})
+    return alerts
+
+
 def collect(link, receivers, passes, cancel, progress):
     observations = []
     for index in range(1, passes + 1):

@@ -8,14 +8,46 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 from app.config import Settings
 from app.main import create_app
+from app.models import AIAnalysisReport
 from app.desktop_tools import validate_selection, wifi_observation
 from app.network_engine import scan, probe
+from app.touch_evidence import ai_report_lines
 
 ADAPTER = {'interface': 'Wi-Fi', 'address': '192.168.0.148',
            'network': '192.168.0.0/24', 'suggested_scope': '192.168.0.0/24'}
 
 
 class DesktopTests(unittest.TestCase):
+    def test_touch_gemini_report_prioritizes_findings_and_matches_current_scan(self):
+        report = AIAnalysisReport(overall_threat_score=42, summary='One device needs review.', findings=[
+            {'target_ip': '192.168.0.22', 'risk_level': 'LOW', 'is_justified': False,
+             'description': 'The device role is unknown.', 'recommended_remediation': 'Check the asset inventory.'},
+            {'target_ip': '192.168.0.10', 'risk_level': 'HIGH', 'is_justified': True,
+             'description': 'TCP port 23 was observed.', 'recommended_remediation': 'Check whether Telnet is expected.'},
+        ])
+        with tempfile.TemporaryDirectory() as tmp:
+            app = create_app(Settings(database=Path(tmp)/'test.db', gpio_enabled=False,
+                                      reboot_enabled=False, serial_port='', api_key='test', network=ADAPTER['network']))
+            with TestClient(app) as client, patch('app.controller.ai_analyzer.analyze', return_value=report):
+                controller = app.state.controller
+                path = '/api/industrial/assessment?include_ai=true'
+                self.assertIn('complete a LAN scan', ai_report_lines(client.get(path).json())[0])
+                controller.db.execute("INSERT INTO scan_batches(id,network,status) VALUES(?,?,'COMPLETE')",
+                                      ('scan-test', ADAPTER['network']))
+                token = re.search('name="action-token" content="([^"]+)', client.get('/').text)[1]
+                headers = {'X-FIIRBots-Token': token}
+                self.assertEqual(client.post('/api/analyze?scan_id=old-scan', headers=headers).status_code, 409)
+                self.assertEqual(client.post('/api/analyze?scan_id=scan-test', headers=headers).status_code, 202)
+                controller.worker.join(timeout=3)
+                lines = ai_report_lines(client.get(path).json())
+                self.assertIn('42/100 · 2 findings', lines[0])
+                self.assertIn('HIGH · 192.168.0.10', lines[1])
+                self.assertIn('Next check · Check whether Telnet is expected.', lines[1])
+                self.assertIn('Evidence incomplete', lines[2])
+                controller.db.execute("INSERT INTO scan_batches(id,network,status) VALUES(?,?,'COMPLETE')",
+                                      ('new-scan', ADAPTER['network']))
+                self.assertIsNone(client.get(path).json()['ai_report'])
+
     def test_windows_connect_timeout_is_inconclusive(self):
         with patch('app.network_engine.socket.socket') as socket:
             socket.return_value.__enter__.return_value.connect_ex.return_value = 10035

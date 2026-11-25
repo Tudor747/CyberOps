@@ -5,12 +5,17 @@ import os
 from fastapi import APIRouter
 from pydantic import Field
 from .models import StrictModel
-from . import observation_tools, wireless_monitor, gps_observer, wifi_survey
+from . import esp_packet_monitor, observation_tools, wireless_monitor, gps_observer, wifi_survey
 from .network_engine import ScanCancelled
 
 
 class CaptureRequest(StrictModel):
     interface: str = Field(min_length=1, max_length=64)
+    duration_s: int = Field(default=10, ge=1, le=30)
+
+
+class EspMonitorRequest(StrictModel):
+    channel: int = Field(ge=1, le=13)
     duration_s: int = Field(default=10, ge=1, le=30)
 
 
@@ -80,7 +85,39 @@ def router(controller, operation):
 
     @routes.get('/api/wifi/survey/latest')
     def latest_survey():
-        return observation_tools.latest(db, 'WIFI_SURVEY') or {'status': 'NOT_TESTED'}
+        scan = observation_tools.latest(db, 'WIFI_SURVEY')
+        if not scan:
+            return {'status': 'NOT_TESTED'}
+        baseline = observation_tools.latest(db, 'WIFI_AP_BASELINE') or {}
+        known = baseline.get('access_points', {})
+        observed = wifi_survey.fresh_inventory(scan)
+        return {**scan, 'known_bssids': sorted(known), 'fresh_bssids': sorted(observed),
+                'alerts': wifi_survey.inventory_alerts(observed, known)}
+
+    @routes.put('/api/wifi/baseline')
+    def wifi_baseline(request: Enrollment):
+        def save():
+            with controller.guard:
+                idle()
+                scan = observation_tools.latest(db, 'WIFI_SURVEY')
+                if not scan or scan['id'] != request.scan_id:
+                    raise ValueError('Refresh the Wi-Fi survey before marking an access point as known')
+                observed = wifi_survey.fresh_inventory(scan)
+                addresses = {address.upper() for address in request.addresses}
+                if not addresses.issubset(observed):
+                    raise ValueError('Select access points from refreshed observations')
+                baseline = observation_tools.latest(db, 'WIFI_AP_BASELINE') or {}
+                known = baseline.get('access_points', {})
+                for address in addresses:
+                    previous = known.get(address, {'ssids': [], 'security': {}})
+                    current = observed[address]
+                    known[address] = {'ssids': current['ssids'] or previous['ssids'],
+                                      'security': {**previous['security'], **current['security']}}
+                if len(known) > 512:
+                    raise ValueError('The known access point list is full')
+                db.event('wifi', 'WIFI_AP_BASELINE', {'access_points': known})
+                return {'status': 'SAVED'}
+        return operation(save)
 
     @routes.post('/api/gps/wifi-snapshot', status_code=202)
     def gps_wifi_snapshot():
@@ -126,6 +163,27 @@ def router(controller, operation):
     @routes.get('/api/wireless/latest')
     def wireless_latest():
         return observation_tools.latest(db, 'WIRELESS_SCAN') or {'status': 'NOT_TESTED'}
+
+    @routes.post('/api/wireless/esp-monitor', status_code=202)
+    def esp_monitor(request: EspMonitorRequest):
+        def progress(elapsed, total, rate):
+            with controller.guard:
+                controller.job.update(message=f'ESP32 · Ch {request.channel} · {rate} frames/s · {total} total '
+                                              f'· {elapsed / 1000:.0f}/{request.duration_s} s')
+
+        def work(cancel):
+            result = esp_packet_monitor.capture(controller.serial, request.channel, request.duration_s, cancel, progress)
+            with controller.guard:
+                if cancel.is_set():
+                    raise ScanCancelled()
+                db.event('wifi', 'ESP_WIFI_MONITOR', result)
+        operation(lambda: controller.launch('ESP32 Packet Monitor', work))
+        return {'status': 'STARTED'}
+
+    @routes.get('/api/wireless/esp-monitor/latest')
+    def esp_monitor_latest():
+        return observation_tools.latest(db, 'ESP_WIFI_MONITOR') or {
+            'status': 'NOT_TESTED', 'message': 'Choose a 2.4 GHz channel to listen using the ESP32.'}
 
     @routes.get('/api/ble/defense')
     def ble_defense():

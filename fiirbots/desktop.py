@@ -8,8 +8,9 @@ from datetime import datetime
 from pathlib import Path
 from tkinter import ttk
 from urllib.error import HTTPError
+from urllib.parse import urlencode
 from urllib.request import Request, urlopen
-from app.touch_evidence import hardware_lines, tool_lines, wifi_lines
+from app.touch_evidence import ai_report_lines, hardware_lines, tool_lines, wifi_lines
 
 
 BASE = 'http://127.0.0.1:8000'
@@ -18,9 +19,10 @@ FIELDS = ('ip', 'name', 'zone', 'role', 'model', 'firmware', 'criticality')
 RECEIVERS = {'Pi + ESP32': 'both', 'Pi only': 'host', 'ESP32 only': 'esp32'}
 TOOL_PATHS = {
     'Hardware': 'state', 'Bluetooth LE': 'ble/defense', 'RF spectrum': 'rf/history',
-    'Wi-Fi monitor': 'wireless/latest', 'GPS track': 'gps/latest',
+    'Packet Monitor': 'wireless/esp-monitor/latest', 'Wi-Fi monitor': 'wireless/latest',
+    'GPS track': 'gps/latest',
     'Position snapshot': 'gps/wifi-snapshot/latest', 'Diagnostics': 'diagnostics/history',
-    'System info': 'system',
+    'System info': 'system', 'Wi-Fi lab': 'lab/wifi-exercise',
 }
 DIAGNOSTICS = {'nRF24 radio 1': 'nrf1', 'nRF24 radio 2': 'nrf2', '433 MHz receiver': 'cc1101',
                'RFID reader': 'rfid', 'IR receiver': 'ir_rx', 'IR loopback': 'ir_tx',
@@ -37,7 +39,8 @@ def request(path, method='GET', data=None):
         headers = {'X-FIIRBots-Token': token[1], 'Content-Type': 'application/json'}
     body = json.dumps(data).encode() if data is not None else None
     try:
-        with urlopen(Request(BASE + '/api/' + path, body, headers, method=method), timeout=8) as response:
+        with urlopen(Request(BASE + '/api/' + path, body, headers, method=method),
+                     timeout=20 if path == 'ai/check' else 8) as response:
             return json.load(response)
     except HTTPError as exc:
         detail = json.load(exc).get('detail', exc.reason)
@@ -169,6 +172,7 @@ class Desktop:
             row.pack(fill='x', pady=4)
             self.button(row, 'Latest result', self.load).pack(side='left', expand=True, fill='x')
             self.button(row, 'Stop scan', self.stop).pack(side='left', expand=True, fill='x', padx=(4, 0))
+            self.button(row, 'Mark AP as known', self.enroll_ap).pack(side='left', expand=True, fill='x', padx=(4, 0))
         elif view == 'Assets':
             self.button(actions, 'Scan configured LAN', lambda: self.start('scan'), True).pack(fill='x')
             row = tk.Frame(actions, bg=BG)
@@ -186,13 +190,17 @@ class Desktop:
                     row=i // 2, column=i % 2, padx=2, pady=2, sticky='ew')
             for col in (0, 1):
                 actions.columnconfigure(col, weight=1, uniform='tools')
-            self.button(actions, 'Close window', self.close).grid(row=4, column=0, columnspan=2, sticky='ew', pady=2)
+            self.button(actions, 'Close window', self.close).grid(
+                row=(len(TOOL_PATHS) + 1) // 2, column=0, columnspan=2, sticky='ew', pady=2)
             self.status.configure(text='Choose a tool')
             return
         elif view in TOOL_PATHS:
             self.tool_actions(actions, view)
         else:
-            self.button(actions, 'Save report', self.save_report, True).pack(fill='x')
+            self.button(actions, 'Analyze with Gemini', self.analyze_report, True).pack(fill='x')
+            for label, action in (('Test Gemini', self.test_gemini), ('Save report', self.save_report),
+                                  ('Stop', self.stop)):
+                self.button(actions, label, action).pack(side='left', fill='x', expand=True, padx=2, pady=4)
         area = tk.Frame(self.body, bg=PANEL)
         area.pack(fill='both', expand=True, pady=(5, 0))
         if view == 'Assets':
@@ -273,8 +281,15 @@ class Desktop:
         controls = []
         if view == 'Bluetooth LE':
             controls = [('Scan for 10 s', lambda: self.start('ble/scan')), ('Enroll device', self.enroll_ble)]
+        elif view == 'Packet Monitor':
+            controls = [('Choose channel · ESP32', lambda: self.choose(
+                'Select a 2.4 GHz channel', {f'Channel {n}': n for n in range(1, 14)},
+                lambda channel: self.start('wireless/esp-monitor', {'channel': channel})))]
         elif view == 'Wi-Fi monitor':
             controls = [('Listen for 10 s', lambda: self.async_request('wireless/interfaces', self.monitor_choice))]
+        elif view == 'Wi-Fi lab':
+            controls = [('Simulate beacon spike', lambda: self.render({'scenario': 'beacon'})),
+                        ('Simulate disconnect spike', lambda: self.render({'scenario': 'disconnect'}))]
         elif view == 'RF spectrum':
             controls = [('Save RF baseline', lambda: self.async_request('rf/baseline', lambda _: self.load(), 'PUT'))]
         elif view == 'GPS track':
@@ -287,7 +302,7 @@ class Desktop:
             controls = [('Choose peripheral', lambda: self.choose('Select a peripheral', DIAGNOSTICS,
                          lambda component: self.start('diagnostics', {'component': component})))]
         controls.append(('Refresh', self.load))
-        if view in ('Bluetooth LE', 'Wi-Fi monitor', 'GPS track', 'Position snapshot', 'Diagnostics'):
+        if view in ('Bluetooth LE', 'Packet Monitor', 'Wi-Fi monitor', 'GPS track', 'Position snapshot', 'Diagnostics'):
             controls.append(('Stop', self.stop))
         for i, (label, action) in enumerate(controls):
             self.button(parent, label, action, primary=i == 0).grid(row=i // 2, column=i % 2,
@@ -309,6 +324,23 @@ class Desktop:
         self.async_request('gps/waypoint', lambda _: self.status.configure(text='Waypoint saved'),
                            'PUT', {'track_id': result['id'], 'label': 'Fix ' + result['points'][-1]['time']})
 
+    def enroll_ap(self):
+        def pick(result):
+            fresh = set(result.get('fresh_bssids', []))
+            choices = {}
+            for point in result.get('access_points', []):
+                bssid = point['bssid']
+                if bssid in fresh:
+                    name = repr(point['ssids'][0]) if point['ssids'] else 'Hidden SSID'
+                    choices[f'{name}  {bssid}'] = bssid
+            if not choices:
+                self.status.configure(text='Run a Wi-Fi survey to find access points first.')
+                return
+            self.choose('Mark access point as known', choices, lambda bssid: self.async_request(
+                'wifi/baseline', lambda _: self.load(), 'PUT',
+                {'scan_id': result['id'], 'addresses': [bssid]}))
+        self.async_request('wifi/survey/latest', pick)
+
     def monitor_choice(self, result):
         radios = {r['name']: r['name'] for r in result['interfaces'] if r['mode'] == 'monitor'}
         if not radios:
@@ -316,6 +348,18 @@ class Desktop:
                                   else 'No Wi-Fi interface is in monitor mode. Use Wi-Fi for adapter scans.')
             return
         self.choose('Monitor interface', radios, lambda name: self.start('wireless/scan', {'interface': name}))
+
+    def analyze_report(self):
+        scan_id = (self.result or {}).get('scan_id')
+        if not scan_id:
+            self.status.configure(text='Go to Assets and complete a LAN scan first.')
+            return
+        self.start('analyze?' + urlencode({'scan_id': scan_id}), starting='Starting Gemini analysis…')
+
+    def test_gemini(self):
+        self.status.configure(text='Testing Gemini connection…')
+        self.async_request('ai/check', lambda result: self.status.configure(
+            text='Gemini · ' + result['message']), 'POST')
 
     def save_report(self):
         contents = self.output.get('1.0', 'end-1c').strip()
@@ -379,7 +423,10 @@ class Desktop:
     def load(self):
         if self.view == 'Tools':
             return
-        path = {'Wi-Fi': 'wifi/survey/latest', 'Report': 'industrial/assessment?include_wifi=true',
+        if self.view == 'Wi-Fi lab':
+            self.render({})
+            return
+        path = {'Wi-Fi': 'wifi/survey/latest', 'Report': 'industrial/assessment?include_wifi=true&include_ai=true',
                 **TOOL_PATHS}.get(self.view, 'industrial/assessment')
         generation = self.generation
 
@@ -414,6 +461,7 @@ class Desktop:
         else:
             lines = [f"Segment · {result['network'] or 'Unconfigured'}",
                      f"LAN scan UTC · {result['scan_at'] or 'Unavailable'}"]
+            lines.extend(ai_report_lines(result))
             for row in result['assets']:
                 profile = row['profile'] or {}
                 ports = ', '.join(map(str, row['open_ports'] or []))
@@ -431,11 +479,11 @@ class Desktop:
         self.output.insert('1.0', '\n\n'.join(lines))
         self.output.configure(state='disabled')
 
-    def start(self, path, data=None):
+    def start(self, path, data=None, *, starting='Starting scan…'):
         if self.watching:
             return
         self.watching = True
-        self.status.configure(text='Starting scan…')
+        self.status.configure(text=starting)
         self.async_request(path, lambda _: self.watch(), 'POST', data, on_error=self.stop_watching, scoped=False)
 
     def stop(self):
